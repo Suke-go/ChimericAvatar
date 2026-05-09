@@ -1,0 +1,25 @@
+{
+    "name": "ChimeraRuntime.Tests.Editor",
+    "rootNamespace": "Chimera.Runtime.Tests",
+    "references": [
+        "ChimeraRuntime",
+        "Unity.Nuget.Newtonsoft.Json",
+        "UnityEngine.TestRunner",
+        "UnityEditor.TestRunner"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": true,
+    "precompiledReferences": [
+        "nunit.framework.dll"
+    ],
+    "autoReferenced": false,
+    "defineConstraints": [
+        "UNITY_INCLUDE_TESTS"
+    ],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

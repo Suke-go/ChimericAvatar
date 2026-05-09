@@ -1,0 +1,36 @@
+# Dependencies
+node_modules/
+
+# Next.js
+.next/
+out/
+*.tsbuildinfo
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+.claude/
+
+# Local databases and runtime assets
+*.db
+*.sqlite
+*.sqlite3
+apps/api/data/
+apps/dashboard/apps/
+
+# Logs and OS files
+*.log
+.DS_Store
+Thumbs.db

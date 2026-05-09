@@ -1,0 +1,120 @@
+{
+  "schemaVersion": "1.0",
+  "sessionCode": "K7M3PQ",
+  "issuedAt": "2026-05-01T06:30:00Z",
+  "expiresAt": "2026-05-01T10:30:00Z",
+  "tracking": {
+    "type": "xreal-image-tracking",
+    "referenceImageName": "poster_a0_v1",
+    "posterFormat": "A0",
+    "orientation": "portrait",
+    "physicalSizeM": [0.841, 1.189],
+    "qrFallback": {
+      "enabled": true,
+      "markerName": "poster_qr_v1",
+      "placementHint": "poster_corner"
+    },
+    "anchorOffset": {
+      "position": [0, 0, 0],
+      "rotation": [0, 0, 0]
+    }
+  },
+  "assets": {
+    "posterImage": {
+      "id": "asset_poster_001",
+      "url": "https://signed.example.com/poster.png",
+      "expiresAt": "2026-05-01T07:00:00Z",
+      "mimeType": "image/png",
+      "sizeBytes": 1830042
+    }
+  },
+  "posterPanels": [
+    {
+      "id": "intro",
+      "label": "Intro",
+      "orderIndex": 1,
+      "bbox": {
+        "x": 0.08,
+        "y": 0.08,
+        "width": 0.32,
+        "height": 0.22
+      },
+      "localBoundsM": {
+        "center": [-0.219, 0.363, 0],
+        "size": [0.269, 0.262]
+      }
+    }
+  ],
+  "presentationCues": [
+    {
+      "id": "cue_001",
+      "segmentId": "seg_001",
+      "type": "panel_focus",
+      "startMs": 0,
+      "durationMs": 2400,
+      "payload": {
+        "panelId": "intro"
+      }
+    }
+  ],
+  "avatar": {
+    "runtimeType": "unity-gvrm",
+    "assetBundleUrl": "https://signed.example.com/avatar.bundle",
+    "assetBundle": {
+      "id": "asset_avatar_bundle_001",
+      "url": "https://signed.example.com/avatar.bundle",
+      "expiresAt": "2026-05-01T07:00:00Z",
+      "mimeType": "application/octet-stream"
+    },
+    "gvrmUrl": "https://signed.example.com/avatar.gvrm",
+    "defaultAnimation": "Idle",
+    "behaviors": {
+      "idle": "Idle",
+      "explain": "Pointing",
+      "listening": "Listening",
+      "thinking": "Breathing"
+    },
+    "placement": {
+      "relativeTo": "poster_anchor",
+      "position": [0.65, -0.2, -0.25],
+      "rotation": [0, -20, 0],
+      "scale": 1.0
+    }
+  },
+  "scripts": [
+    {
+      "profile": "master",
+      "language": "ja",
+      "segments": [
+        {
+          "id": "seg_001",
+          "panelId": "intro",
+          "text": "This avatar explains the research poster for visitors.",
+          "audioUrl": "https://signed.example.com/audio/seg_001.mp3",
+          "audio": {
+            "id": "tts_seg_001",
+            "url": "https://signed.example.com/audio/seg_001.mp3",
+            "expiresAt": "2026-05-01T07:00:00Z",
+            "mimeType": "audio/mpeg"
+          },
+          "animation": "explain",
+          "durationSec": 6.2,
+          "caption": "This avatar explains the research poster for visitors."
+        }
+      ]
+    }
+  ],
+  "qa": {
+    "websocketUrl": "wss://api.example.com/runtime/K7M3PQ/questions",
+    "defaultProfile": "master",
+    "defaultLanguage": "ja",
+    "supportedProfiles": ["beginner", "master", "professional"],
+    "supportedLanguages": ["ja", "en"],
+    "allowEscalation": true
+  },
+  "features": {
+    "liveQa": true,
+    "dashboardRemoteControl": true,
+    "handTracking": false
+  }
+}

@@ -1,0 +1,295 @@
+{
+  "schemaVersion": "1.0",
+  "sessionCode": "6S2C76",
+  "issuedAt": "2026-05-02T10:05:26.021055Z",
+  "expiresAt": "2026-05-02T10:10:26Z",
+  "tracking": {
+    "type": "xreal-image-tracking",
+    "referenceImageName": "poster_6s2c76_v1",
+    "posterFormat": "A0",
+    "orientation": "portrait",
+    "physicalSizeM": [
+      0.841,
+      1.189
+    ],
+    "qrFallback": {
+      "enabled": true,
+      "markerName": "poster_6s2c76_qr_v1",
+      "placementHint": "poster_corner"
+    },
+    "anchorOffset": {
+      "position": [
+        0,
+        0,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ]
+    }
+  },
+  "assets": {
+    "posterImage": {
+      "id": "bd50bec2-ddfa-48d2-91f9-749d7a6eee60",
+      "url": "http://testserver/api/v1/assets/bd50bec2-ddfa-48d2-91f9-749d7a6eee60/download?token=1777716626.58b39ed019db204aae8669c45f2849429f723ab6822eb549fff958c445ed0173",
+      "expiresAt": "2026-05-02T10:10:26Z",
+      "mimeType": "image/png",
+      "sizeBytes": 208
+    }
+  },
+  "posterPanels": [
+    {
+      "id": "10b30c65-e0b9-4464-a9a3-4b6c36db7962",
+      "label": "Intro",
+      "orderIndex": 0,
+      "bbox": {
+        "x": 0.05,
+        "y": 0.1,
+        "width": 0.25,
+        "height": 0.3
+      },
+      "localBoundsM": {
+        "center": [
+          -0.273325,
+          0.29725,
+          0
+        ],
+        "size": [
+          0.21025,
+          0.3567
+        ]
+      }
+    },
+    {
+      "id": "3a43ac85-e653-4695-8fde-d0a1b19b301f",
+      "label": "Method",
+      "orderIndex": 1,
+      "bbox": {
+        "x": 0.35,
+        "y": 0.1,
+        "width": 0.25,
+        "height": 0.3
+      },
+      "localBoundsM": {
+        "center": [
+          -0.021025,
+          0.29725,
+          0
+        ],
+        "size": [
+          0.21025,
+          0.3567
+        ]
+      }
+    },
+    {
+      "id": "738be366-7563-474a-9c1d-68becbf4a40e",
+      "label": "Result",
+      "orderIndex": 2,
+      "bbox": {
+        "x": 0.65,
+        "y": 0.1,
+        "width": 0.25,
+        "height": 0.3
+      },
+      "localBoundsM": {
+        "center": [
+          0.231275,
+          0.29725,
+          0
+        ],
+        "size": [
+          0.21025,
+          0.3567
+        ]
+      }
+    }
+  ],
+  "presentationCues": [],
+  "avatar": {
+    "runtimeType": "gvrm",
+    "displayName": "Demo",
+    "attribution": "tester",
+    "licenseNote": "MIT",
+    "defaultAnimation": "Idle",
+    "behaviors": {
+      "idle": "Idle",
+      "explain": "Pointing",
+      "listening": "Listening",
+      "thinking": "Breathing"
+    },
+    "placement": {
+      "relativeTo": "poster_anchor",
+      "position": [
+        0.65,
+        -0.2,
+        -0.25
+      ],
+      "rotation": [
+        0.0,
+        -20.0,
+        0.0
+      ],
+      "scale": 1.0
+    },
+    "assetBundle": {
+      "id": "39dc210b-600e-4a6a-b579-c31f539b0930",
+      "url": "http://testserver/api/v1/assets/39dc210b-600e-4a6a-b579-c31f539b0930/download?token=1777716626.e863a78726beeb63c0cf49dad279be2593ebfb12d862a49ff694d6c141ab6fff",
+      "expiresAt": "2026-05-02T10:10:26Z",
+      "mimeType": "application/zip",
+      "sizeBytes": 470
+    },
+    "format": "gaussian-vrm",
+    "metadata": {
+      "modelScale": 1.0,
+      "boneOperations": [],
+      "gsPosition": [
+        0,
+        0,
+        0
+      ],
+      "gsQuaternion": [
+        0,
+        0,
+        0,
+        1
+      ],
+      "splatVertexIndices": [
+        0,
+        1,
+        2
+      ],
+      "splatBoneIndices": [
+        0,
+        0,
+        0
+      ],
+      "splatRelativePoses": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    }
+  },
+  "scripts": [
+    {
+      "profile": "master",
+      "language": "ja",
+      "segments": [
+        {
+          "id": "c15d8903-4b52-43ae-a8c9-b79d7f8cb720",
+          "panelId": null,
+          "order": 0,
+          "type": "opening",
+          "text": "この説明はMaster（学部・修士程度）向けです。ポスターをパネル順に説明します。",
+          "durationEstimateSec": 4,
+          "evidenceChunkIds": []
+        },
+        {
+          "id": "fb5829cc-e8d3-42ea-9e23-7e75c65c99b7",
+          "panelId": "10b30c65-e0b9-4464-a9a3-4b6c36db7962",
+          "order": 1,
+          "type": "panel_explain",
+          "text": "Introでは、主張と根拠の対応を確認します。ここで説明すべき内容は、Our method (M) reduces reconstruction error by 22% (p<0.01) on the new benchmark. The dataset has 1280 scenes. Limitations: small training data and lack of dynamic objects.",
+          "durationEstimateSec": 11,
+          "evidenceChunkIds": [
+            "458849c9-fa55-4440-9e58-5e1a53ecf65a",
+            "509be63f-43c7-48f6-b1c4-3cb511ffe337"
+          ]
+        },
+        {
+          "id": "2ce5a33a-533d-4920-a10d-19520b9d727e",
+          "panelId": "3a43ac85-e653-4695-8fde-d0a1b19b301f",
+          "order": 2,
+          "type": "panel_explain",
+          "text": "Methodでは、主張と根拠の対応を確認します。ここで説明すべき内容は、Our method (M) reduces reconstruction error by 22% (p<0.01) on the new benchmark. The dataset has 1280 scenes. Limitations: small training data and lack of dynamic objects.",
+          "durationEstimateSec": 11,
+          "evidenceChunkIds": [
+            "458849c9-fa55-4440-9e58-5e1a53ecf65a",
+            "509be63f-43c7-48f6-b1c4-3cb511ffe337"
+          ]
+        },
+        {
+          "id": "66e2aabf-b847-4302-8523-15bd7e0692a7",
+          "panelId": "738be366-7563-474a-9c1d-68becbf4a40e",
+          "order": 3,
+          "type": "panel_explain",
+          "text": "Resultでは、主張と根拠の対応を確認します。ここで説明すべき内容は、Our method (M) reduces reconstruction error by 22% (p<0.01) on the new benchmark. The dataset has 1280 scenes. Limitations: small training data and lack of dynamic objects.",
+          "durationEstimateSec": 11,
+          "evidenceChunkIds": [
+            "458849c9-fa55-4440-9e58-5e1a53ecf65a",
+            "509be63f-43c7-48f6-b1c4-3cb511ffe337"
+          ]
+        },
+        {
+          "id": "edaecdf4-9af4-475d-8f93-7a5b24fccaa2",
+          "panelId": null,
+          "order": 4,
+          "type": "limitation",
+          "text": "研究上の限界として、制約として、小規模データセットでの過学習傾向と、動的物体への未対応がある。",
+          "durationEstimateSec": 6,
+          "evidenceChunkIds": [
+            "509be63f-43c7-48f6-b1c4-3cb511ffe337"
+          ]
+        },
+        {
+          "id": "314e6812-6dbf-44cb-8921-72633543d004",
+          "panelId": null,
+          "order": 5,
+          "type": "closing",
+          "text": "登録された根拠を超える質問は、推測で答えず発表者へ確認します。",
+          "durationEstimateSec": 5,
+          "evidenceChunkIds": []
+        }
+      ]
+    }
+  ],
+  "qa": {
+    "websocketUrl": "ws://testserver/api/v1/runtime/6S2C76/questions",
+    "runtimeToken": "1777716626.76dbb2763edabce830cd012379cebd66021999076d4ec4e14674ebe408de3ec4",
+    "runtimeTokenExpiresAt": "2026-05-02T10:10:26Z",
+    "defaultProfile": "master",
+    "defaultLanguage": "ja",
+    "supportedProfiles": [
+      "beginner",
+      "master",
+      "professional"
+    ],
+    "supportedLanguages": [
+      "ja",
+      "en"
+    ],
+    "allowEscalation": true,
+    "approvedSimulatedQas": [
+      {
+        "id": "f1d56b61-4075-4341-9813-93205d268539",
+        "profile": "master",
+        "language": "ja",
+        "panelId": null,
+        "question": "この研究の主な貢献は何ですか？",
+        "answer": "登録済み資料では、Our method (M) reduces reconstruction error by 22% (p<0.01) on the new benchmark. The dataset has 1280 scenes. Limitations: small training data and lack of dynamic objects.",
+        "evidenceChunkIds": [
+          "458849c9-fa55-4440-9e58-5e1a53ecf65a"
+        ]
+      },
+      {
+        "id": "a5bf10bf-e7c1-4fd6-bbf7-cf49729cf29d",
+        "profile": "master",
+        "language": "ja",
+        "panelId": null,
+        "question": "この主張を支える根拠は何ですか？",
+        "answer": "登録済み資料では、制約として、小規模データセットでの過学習傾向と、動的物体への未対応がある。",
+        "evidenceChunkIds": [
+          "509be63f-43c7-48f6-b1c4-3cb511ffe337"
+        ]
+      }
+    ]
+  },
+  "features": {
+    "liveQa": true,
+    "dashboardRemoteControl": false,
+    "handTracking": false
+  }
+}

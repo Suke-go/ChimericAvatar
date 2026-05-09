@@ -1,0 +1,53 @@
+[project]
+name = "chimera-api"
+version = "0.1.0"
+description = "Chimera Presenter lab-first API"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.115.0",
+  "uvicorn>=0.34.0",
+  "sqlalchemy>=2.0.39",
+  "pydantic>=2.11.0",
+  "pydantic-settings>=2.8.0",
+  "python-multipart>=0.0.20",
+  "pyjwt[crypto]>=2.10.1",
+  "httpx>=0.28.1",
+  "pymupdf>=1.26.0",
+  # Avatar preprocess: PLY parser, GLB/VRM parser, vector math.
+  "plyfile>=1.0.3",
+  "pygltflib>=1.16.2",
+  "numpy>=1.26.0",
+  "scipy>=1.13.0"
+]
+
+[project.optional-dependencies]
+postgres = [
+  "psycopg[binary]>=3.2.0",
+  "pgvector>=0.3.0"
+]
+migrations = [
+  "alembic>=1.13.0"
+]
+spz = [
+  # Niantic's official C++ Gaussian Splat compression library, with Python
+  # bindings via nanobind. Used to auto-convert user PLY uploads to SPZ
+  # (~10× smaller) before bundling into .gvrm so the output fits Supabase
+  # Free's 50MB/file cap. NOT a dev requirement — gracefully degrades to
+  # bundling raw PLY if not installed (Windows dev env can't compile this
+  # without MSVC toolchain).
+  #
+  # Build deps (Debian/Ubuntu): cmake, build-essential, python3-dev, git,
+  # libzstd-dev, zlib1g-dev. The Dockerfile installs these.
+  "spz @ git+https://github.com/nianticlabs/spz.git"
+]
+dev = [
+  "pytest>=8.3.5",
+  "alembic>=1.13.0"
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["app*"]

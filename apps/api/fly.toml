@@ -1,0 +1,88 @@
+# Fly.io config for the Chimera Presenter API.
+#
+# Single-instance, single-region (nrt = Tokyo) by design — see DEPLOY.md.
+# Avatar source uploads (PLY/SPZ/VRM) live on the persistent volume during
+# the build window, then get deleted; the .gvrm output goes to Supabase.
+# Multi-instance scale-out would require an S3/R2 adapter for the source
+# kinds before the constraint can relax.
+
+app = "chimera-api"
+primary_region = "nrt"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  APP_ENVIRONMENT = "production"
+  STORAGE_BACKEND = "supabase"
+  PORT = "8000"
+  # avatar_build.py reads the bundled CC0 fem_vroid.vrm from this dir when
+  # the user only uploads a scan. Match the Dockerfile's COPY destination.
+  AVATAR_BASE_DIR = "/app/avatar-base"
+  AVATAR_DEFAULT_VRM_FILENAME = "fem_vroid.vrm"
+  UPLOAD_ROOT = "/data/uploads"
+
+# Persistent volume — required for transient source PLY/VRM during build.
+# Without this, a machine restart mid-build orphans the upload. Create:
+#   fly volumes create chimera_uploads --size 3 --region nrt --yes
+[mounts]
+  source = "chimera_uploads"
+  destination = "/data"
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  # Keep the machine warm. preprocess BackgroundTasks (30-60s for typical
+  # Scaniverse scans) outlive the request that started them; if Fly stops
+  # the machine on idle the task gets killed mid-build. Pay the always-on
+  # cost (~$5/mo) to dodge that class of bug.
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ["app"]
+
+  [http_service.concurrency]
+    type = "connections"
+    hard_limit = 200
+    soft_limit = 100
+
+  # WebSocket connections for runtime live-QA must persist for the duration
+  # of an XREAL session.
+  [[http_service.checks]]
+    grace_period = "15s"   # alembic upgrade can take a beat on cold start
+    interval = "30s"
+    timeout = "5s"
+    method = "GET"
+    path = "/health"
+
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 1
+  # Production OOM observed at 1024MB during preprocess of a real
+  # Scaniverse scan (uvicorn rss hit 863MB before kernel killed it). The
+  # synthetic 100k-splat test only peaked at ~400MB; real scans with
+  # higher SH degree, larger splat counts, and SPZ encoding C++ heap blow
+  # past that. 2048MB gives genuine headroom; downsize later if metrics
+  # show consistent <1GB.
+  memory_mb = 2048
+
+# Single-instance enforcement. Without this, fly auto-scales horizontally
+# under load and avatar source files become unreachable across replicas.
+# Apply once after `fly deploy` if not picked up automatically:
+#   fly scale count 1 --region nrt
+[deploy]
+  strategy = "immediate"
+
+# Set secrets out-of-band (these are NOT stored in fly.toml):
+#   fly secrets set \
+#     DATABASE_URL=postgresql+psycopg://...supabase.co:5432/postgres \
+#     SUPABASE_URL=https://<ref>.supabase.co \
+#     SUPABASE_SECRET_KEY=sb_secret_... \
+#     SUPABASE_JWT_SECRET=... \
+#     SUPABASE_STORAGE_BUCKET=session-assets-private \
+#     ASSET_URL_SECRET=$(openssl rand -hex 32) \
+#     OPENAI_API_KEY=... \
+#     ELEVENLABS_API_KEY=... \
+#     ELEVENLABS_DEFAULT_VOICE_ID=... \
+#     CORS_ALLOW_ORIGINS=https://your-dashboard.vercel.app \
+#     API_PUBLIC_BASE_URL=https://chimera-api.fly.dev

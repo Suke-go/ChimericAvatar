@@ -1,0 +1,470 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chimera-presenter.local/schema/runtime-manifest.schema.json",
+  "title": "Chimera Runtime Manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "sessionCode", "tracking", "assets", "posterPanels", "presentationCues", "avatar", "scripts", "qa"],
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "const": "1.0"
+    },
+    "sessionCode": {
+      "type": "string",
+      "pattern": "^[A-Z0-9]{6,12}$"
+    },
+    "issuedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "expiresAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "tracking": {
+      "$ref": "#/$defs/tracking"
+    },
+    "avatar": {
+      "$ref": "#/$defs/avatar"
+    },
+    "assets": {
+      "$ref": "#/$defs/assets"
+    },
+    "posterPanels": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/posterPanel"
+      }
+    },
+    "presentationCues": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/presentationCue"
+      }
+    },
+    "scripts": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/scriptProfile"
+      }
+    },
+    "qa": {
+      "$ref": "#/$defs/qa"
+    },
+    "features": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "boolean"
+      }
+    }
+  },
+  "$defs": {
+    "vec2": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "items": { "type": "number" }
+    },
+    "vec3": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": { "type": "number" }
+    },
+    "signedAsset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "url", "expiresAt", "mimeType"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "url": {
+          "type": "string",
+          "minLength": 1
+        },
+        "expiresAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "mimeType": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sizeBytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "sha256": {
+          "type": "string"
+        }
+      }
+    },
+    "assets": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["posterImage"],
+      "properties": {
+        "posterImage": {
+          "$ref": "#/$defs/signedAsset"
+        },
+        "qrMarker": {
+          "$ref": "#/$defs/signedAsset"
+        }
+      }
+    },
+    "posterPanel": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "label", "orderIndex", "bbox", "localBoundsM"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1
+        },
+        "orderIndex": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "bbox": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["x", "y", "width", "height"],
+          "properties": {
+            "x": { "type": "number", "minimum": 0, "maximum": 1 },
+            "y": { "type": "number", "minimum": 0, "maximum": 1 },
+            "width": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
+            "height": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 }
+          }
+        },
+        "localBoundsM": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["center", "size"],
+          "properties": {
+            "center": { "$ref": "#/$defs/vec3" },
+            "size": { "$ref": "#/$defs/vec2" }
+          }
+        }
+      }
+    },
+    "presentationCue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "type", "startMs", "payload"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "segmentId": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "enum": ["panel_focus", "pointer_move", "caption_show", "caption_hide", "audio_play", "qr_show", "ui_panel_show"]
+        },
+        "startMs": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "durationMs": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "payload": {
+          "type": "object"
+        }
+      }
+    },
+    "tracking": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "referenceImageName", "posterFormat", "orientation", "physicalSizeM", "anchorOffset"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["xreal-image-tracking", "manual-anchor", "qr-anchor"]
+        },
+        "referenceImageName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "posterFormat": {
+          "type": "string",
+          "enum": ["A0"]
+        },
+        "orientation": {
+          "type": "string",
+          "enum": ["portrait", "landscape"]
+        },
+        "physicalSizeM": {
+          "$ref": "#/$defs/vec2"
+        },
+        "qrFallback": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled"],
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "markerName": {
+              "type": "string"
+            },
+            "placementHint": {
+              "type": "string",
+              "enum": ["poster_corner", "adjacent_sheet"]
+            }
+          }
+        },
+        "anchorOffset": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["position", "rotation"],
+          "properties": {
+            "position": {
+              "$ref": "#/$defs/vec3"
+            },
+            "rotation": {
+              "$ref": "#/$defs/vec3"
+            }
+          }
+        }
+      }
+    },
+    "avatar": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["runtimeType", "defaultAnimation", "behaviors", "placement"],
+      "properties": {
+        "runtimeType": {
+          "type": "string",
+          "enum": ["unity-gvrm", "default-vrm"]
+        },
+        "assetBundleUrl": {
+          "type": "string",
+          "minLength": 1
+        },
+        "assetBundle": {
+          "$ref": "#/$defs/signedAsset"
+        },
+        "gvrmUrl": {
+          "type": "string"
+        },
+        "defaultAnimation": {
+          "type": "string",
+          "minLength": 1
+        },
+        "behaviors": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "required": ["idle", "explain", "listening", "thinking"],
+          "properties": {
+            "idle": { "type": "string" },
+            "explain": { "type": "string" },
+            "listening": { "type": "string" },
+            "thinking": { "type": "string" }
+          }
+        },
+        "placement": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["relativeTo", "position", "rotation", "scale"],
+          "properties": {
+            "relativeTo": {
+              "type": "string",
+              "enum": ["poster_anchor", "world", "viewer"]
+            },
+            "position": {
+              "$ref": "#/$defs/vec3"
+            },
+            "rotation": {
+              "$ref": "#/$defs/vec3"
+            },
+            "scale": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            }
+          }
+        }
+      }
+    },
+    "scriptProfile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profile", "language", "segments"],
+      "properties": {
+        "profile": {
+          "type": "string",
+          "enum": ["beginner", "master", "professional"]
+        },
+        "language": {
+          "type": "string",
+          "enum": ["ja", "en"]
+        },
+        "segments": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/scriptSegment"
+          }
+        }
+      }
+    },
+    "scriptSegment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "text"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "panelId": {
+          "type": ["string", "null"],
+          "minLength": 1
+        },
+        "order": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "type": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1
+        },
+        "audioUrl": {
+          "type": "string",
+          "minLength": 1
+        },
+        "audio": {
+          "$ref": "#/$defs/signedAsset"
+        },
+        "animation": {
+          "type": "string",
+          "minLength": 1
+        },
+        "durationSec": {
+          "type": "number",
+          "minimum": 0
+        },
+        "durationEstimateSec": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "evidenceChunkIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "voice": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["provider", "voiceId", "modelId"],
+          "properties": {
+            "provider": { "type": "string" },
+            "voiceId": { "type": "string" },
+            "modelId": { "type": "string" }
+          }
+        },
+        "caption": {
+          "type": "string"
+        }
+      }
+    },
+    "qa": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["websocketUrl", "defaultProfile", "defaultLanguage", "supportedProfiles", "supportedLanguages"],
+      "properties": {
+        "websocketUrl": {
+          "type": "string",
+          "minLength": 1
+        },
+        "defaultProfile": {
+          "type": "string",
+          "enum": ["beginner", "master", "professional"]
+        },
+        "defaultLanguage": {
+          "type": "string",
+          "enum": ["ja", "en"]
+        },
+        "supportedProfiles": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["beginner", "master", "professional"]
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "supportedLanguages": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["ja", "en"]
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "allowEscalation": {
+          "type": "boolean",
+          "default": true
+        },
+        "approvedSimulatedQas": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/simulatedQa"
+          }
+        }
+      }
+    },
+    "simulatedQa": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "profile", "language", "question", "answer", "evidenceChunkIds"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "profile": {
+          "type": "string",
+          "enum": ["beginner", "master", "professional"]
+        },
+        "language": {
+          "type": "string",
+          "enum": ["ja", "en"]
+        },
+        "panelId": {
+          "type": ["string", "null"]
+        },
+        "question": {
+          "type": "string",
+          "minLength": 1
+        },
+        "answer": {
+          "type": "string",
+          "minLength": 1
+        },
+        "evidenceChunkIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

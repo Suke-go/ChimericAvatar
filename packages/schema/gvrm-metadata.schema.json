@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chimera-presenter.local/schema/gvrm-metadata.schema.json",
+  "title": "GVRM Metadata",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "modelScale",
+    "boneOperations",
+    "gsPosition",
+    "gsQuaternion",
+    "splatVertexIndices",
+    "splatBoneIndices",
+    "splatRelativePoses"
+  ],
+  "properties": {
+    "modelScale": {
+      "type": "number",
+      "exclusiveMinimum": 0
+    },
+    "boneOperations": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "gsPosition": {
+      "$ref": "#/$defs/vec3"
+    },
+    "gsQuaternion": {
+      "$ref": "#/$defs/quat"
+    },
+    "splatVertexIndices": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "minimum": 0
+      }
+    },
+    "splatBoneIndices": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "minimum": 0
+      }
+    },
+    "splatRelativePoses": {
+      "type": "array",
+      "items": {
+        "type": "number"
+      }
+    }
+  },
+  "$defs": {
+    "vec3": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": { "type": "number" }
+    },
+    "quat": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "items": { "type": "number" }
+    }
+  }
+}

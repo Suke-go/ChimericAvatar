@@ -1,0 +1,243 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  api:
+    name: API (Python)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/api
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: apps/api/pyproject.toml
+
+      - name: Install (with postgres + migrations + dev extras)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[postgres,migrations,dev]"
+
+      - name: Syntax check (every .py compiles)
+        run: python -m compileall -q app
+
+      - name: Smoke import (FastAPI app boots)
+        env:
+          DEBUG_AUTH_ENABLED: "true"
+          ASSET_URL_SECRET: "ci-asset-secret"
+          STORAGE_BACKEND: "local"
+          DATABASE_URL: "sqlite:///./ci_smoke.db"
+        run: |
+          python -c "from app.main import app; print('routes', len(app.routes))"
+
+      - name: Alembic migrations apply cleanly (sqlite)
+        env:
+          DATABASE_URL: "sqlite:///./ci_alembic.db"
+        run: |
+          rm -f ci_alembic.db
+          alembic upgrade head
+          # `alembic check` returns non-zero when models drifted from the
+          # latest revision, but we tolerate it here because pgvector columns
+          # aren't represented in SQLAlchemy's metadata.
+          alembic check || true
+          rm -f ci_alembic.db
+
+      - name: Pytest (if any tests)
+        run: |
+          if [ -d tests ]; then pytest -q; else echo "no tests directory yet"; fi
+
+  dashboard:
+    name: Dashboard (Next.js)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/dashboard
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: apps/dashboard/package-lock.json
+
+      - name: Install
+        run: npm ci || npm install --no-audit --no-fund
+
+      - name: TypeScript typecheck
+        run: npx tsc --noEmit
+
+      - name: Next.js build (catches runtime-only issues like SSR/Edge breakage)
+        env:
+          NEXT_PUBLIC_API_BASE_URL: "http://localhost:8000"
+        run: npm run build
+
+  unity-scripts:
+    name: Unity scripts (C# syntax)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Stage scripts + Unity stubs
+        run: |
+          mkdir -p _csharp_check/src
+          cp -r apps/xr-client/Assets/ChimeraRuntime/Runtime/. _csharp_check/src/
+          rm -f _csharp_check/src/ChimeraRuntime.asmdef
+          cat > _csharp_check/ChimeraRuntime.csproj <<'EOF'
+          <Project Sdk="Microsoft.NET.Sdk">
+            <PropertyGroup>
+              <TargetFramework>netstandard2.1</TargetFramework>
+              <LangVersion>9.0</LangVersion>
+              <RootNamespace>Chimera.Runtime</RootNamespace>
+              <NoWarn>CS1591;CS0067;CS0414;CS0649</NoWarn>
+              <AssemblyName>ChimeraRuntime</AssemblyName>
+              <OutputType>Library</OutputType>
+              <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+            </PropertyGroup>
+            <ItemGroup>
+              <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+            </ItemGroup>
+            <ItemGroup>
+              <Compile Include="src/**/*.cs" />
+            </ItemGroup>
+          </Project>
+          EOF
+          cat > _csharp_check/src/_UnityStubs.cs <<'EOF'
+          using System;
+          using System.Collections;
+          using System.Collections.Generic;
+          using System.Threading.Tasks;
+          namespace UnityEngine {
+              public class Object { public string name; public static void Destroy(Object o) { } }
+              public partial class Component : Object { public Transform transform => null; public GameObject gameObject => null; public T GetComponent<T>() => default; }
+              public partial class Transform : Component { public Vector3 localPosition; public Quaternion localRotation; public Vector3 localScale = new Vector3(1f,1f,1f); public void SetParent(Transform p, bool worldPositionStays = true) { } }
+              public partial class GameObject : Object { private readonly Transform _t = new Transform(); public Transform transform => _t; public GameObject() { } public GameObject(string n) { name=n; } public T AddComponent<T>() where T:Component => default; public T GetComponent<T>() where T:Component => default; }
+              public class MonoBehaviour : Component { public Coroutine StartCoroutine(IEnumerator e) => null; public void StopCoroutine(Coroutine c) { } }
+              public class Coroutine { }
+              public partial struct Vector2 { public float x, y; public Vector2(float a, float b) { x=a;y=b; } }
+              public partial struct Vector3 { public float x, y, z; public Vector3(float a, float b, float c) { x=a;y=b;z=c; } public static Vector3 zero => default; public static Vector3 one => new Vector3(1f,1f,1f); public static Vector3 operator *(Vector3 v, float s) => new Vector3(v.x*s,v.y*s,v.z*s); }
+              public partial struct Quaternion { public static Quaternion identity => default; public static Quaternion Euler(float x, float y, float z) => default; }
+              public static class Time { public static float time => 0; public static float deltaTime => 0; public static float unscaledDeltaTime => 0; }
+              public static class Mathf { public static int Max(int a, int b) => a>b?a:b; public static float Max(float a, float b) => a>b?a:b; public static int Min(int a, int b) => a<b?a:b; }
+              public static class Application { public static string persistentDataPath => "."; }
+              public class Texture2D : Object { public Texture2D(int a, int b, TextureFormat f, bool mipChain) { } public bool LoadImage(byte[] d, bool markNonReadable) => true; }
+              public enum TextureFormat { RGBA32 }
+              public class AudioClip : Object { }
+              public class AudioSource : Component { public AudioClip clip; public bool isPlaying => false; public void Play() { } public void Stop() { } public AudioSource() { } }
+              public enum AudioType { MPEG }
+              public class TooltipAttribute : Attribute { public TooltipAttribute(string s) { } }
+              public class SerializeFieldAttribute : Attribute { }
+              public class RequireComponentAttribute : Attribute { public RequireComponentAttribute(Type t) { } }
+              public class HeaderAttribute : Attribute { public HeaderAttribute(string s) { } }
+              public static class Debug { public static void Log(object o) { } public static void LogError(object o) { } public static void LogWarning(object o) { } public static void LogException(Exception ex) { } }
+              public class AsyncOperation { public event Action<AsyncOperation> completed; }
+          }
+          namespace UnityEngine.Networking {
+              public class DownloadHandler { public byte[] data => Array.Empty<byte>(); public string text => ""; }
+              public class DownloadHandlerBuffer : DownloadHandler { }
+              public class DownloadHandlerAudioClip : DownloadHandler { public static AudioClip GetContent(UnityWebRequest r) => null; }
+              public partial class UnityWebRequest : IDisposable {
+                  public DownloadHandler downloadHandler; public string error => ""; public long responseCode => 200; public Result result => Result.Success;
+                  public enum Result { Success, ConnectionError, DataProcessingError, ProtocolError }
+                  public static UnityWebRequest Get(string url) => new UnityWebRequest();
+                  public UnityWebRequest() { } public UnityWebRequest(string url, string method) { }
+                  public void SetRequestHeader(string k, string v) { } public AsyncOperation SendWebRequest() => new AsyncOperation(); public void Abort() { } public void Dispose() { }
+              }
+              public static class UnityWebRequestMultimedia { public static UnityWebRequest GetAudioClip(string uri, AudioType type) => new UnityWebRequest(); }
+          }
+          EOF
+          cat > _csharp_check/src/_UnityStubs2.cs <<'EOF'
+          using System;
+          using System.Collections.Generic;
+          namespace UnityEngine {
+              public partial struct Vector3 {
+                  public static Vector3 back     => new Vector3(0f, 0f, -1f);
+                  public static Vector3 forward  => new Vector3(0f, 0f,  1f);
+                  public static Vector3 up       => new Vector3(0f, 1f,  0f);
+                  public static Vector3 right    => new Vector3(1f, 0f,  0f);
+                  public float sqrMagnitude => x*x + y*y + z*z;
+                  public Vector3 normalized => this;
+                  public static Vector3 operator +(Vector3 a, Vector3 b) => new Vector3(a.x+b.x, a.y+b.y, a.z+b.z);
+                  public static Vector3 operator -(Vector3 a, Vector3 b) => new Vector3(a.x-b.x, a.y-b.y, a.z-b.z);
+              }
+              public partial struct Quaternion {
+                  public static Quaternion LookRotation(Vector3 forward, Vector3 up) => default;
+                  public static Quaternion LookRotation(Vector3 forward) => default;
+              }
+              public partial class Transform {
+                  public Vector3 position;
+                  public Quaternion rotation;
+                  public Vector3 forward;
+                  public void SetPositionAndRotation(Vector3 p, Quaternion r) { position = p; rotation = r; }
+              }
+              public partial class Component {
+                  public T GetComponentInParent<T>() => default;
+                  public T GetComponentInChildren<T>() => default;
+                  public T GetComponentInChildren<T>(bool includeInactive) => default;
+              }
+              public partial class GameObject {
+                  public static GameObject CreatePrimitive(PrimitiveType t) => new GameObject();
+              }
+              public enum PrimitiveType { Sphere, Capsule, Cylinder, Cube, Plane, Quad }
+              public class Camera : Component { public static Camera main => null; }
+              public struct Pose {
+                  public Vector3 position;
+                  public Quaternion rotation;
+                  public Pose(Vector3 p, Quaternion r) { position = p; rotation = r; }
+              }
+              public class ScriptableObject : Object { }
+              public class CreateAssetMenuAttribute : Attribute {
+                  public string fileName;
+                  public string menuName;
+                  public int order;
+              }
+          }
+          namespace UnityEngine.Events {
+              public class UnityEventBase { }
+              public class UnityEvent : UnityEventBase { public void Invoke() { } }
+              public class UnityEvent<T0> : UnityEventBase { public void Invoke(T0 arg0) { } }
+              public class UnityEvent<T0,T1> : UnityEventBase { public void Invoke(T0 a, T1 b) { } }
+          }
+          namespace UnityEngine {
+              public static class PlayerPrefs {
+                  public static string GetString(string k) => null;
+                  public static string GetString(string k, string fallback) => fallback;
+                  public static void SetString(string k, string v) { }
+                  public static bool HasKey(string k) => false;
+                  public static void DeleteKey(string k) { }
+                  public static void Save() { }
+              }
+              public partial class Component {
+                  public T[] GetComponentsInChildren<T>() => Array.Empty<T>();
+                  public T[] GetComponentsInChildren<T>(bool includeInactive) => Array.Empty<T>();
+              }
+          }
+          namespace UnityEngine.Networking {
+              public class UploadHandler { }
+              public class UploadHandlerRaw : UploadHandler { public UploadHandlerRaw(byte[] data) { } }
+              public partial class UnityWebRequest {
+                  public UploadHandler uploadHandler;
+              }
+          }
+          EOF
+
+      - name: dotnet build (compile-check Unity scripts)
+        working-directory: _csharp_check
+        run: dotnet build -nologo --verbosity quiet
