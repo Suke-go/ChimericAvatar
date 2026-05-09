@@ -28,6 +28,7 @@ Chimera Presenterの本番設計方針を管理するリポジトリです。
 - [Chimera Presenter 本番設計方針](docs/production-design-policy.md)
 - [技術詳細設計](docs/technical-blueprint.md)
 - [Web実装詳細設計](docs/web-implementation-design.md)
+- [Unity GVRM Runtime Logic](docs/unity-gvrm-runtime-logic.md)
 - [検証計画](docs/verification-plan.md)
 - [実装背景と参照文献](docs/implementation-background-and-references.md)
 - [Evidence-Governed Knowledge設計](docs/knowledge-governance-design.md)

@@ -4,6 +4,9 @@ This Unity project ships a single executable that the Chimera Presenter session 
 on either of the two co-target devices defined in
 [ADR 0003](../../docs/adr/0003-dual-target-xreal-and-meta-quest.md):
 
+The implementation plan for loading and rendering human `.gvrm` avatars lives in
+[Unity GVRM Runtime Logic](../../docs/unity-gvrm-runtime-logic.md).
+
 ```text
 Primary AR test:    Meta Quest 3                                     (Phase 1, 2)
 Secondary AR test:  XREAL One Pro + XREAL Eye + XREAL Beam Pro       (Phase 3)

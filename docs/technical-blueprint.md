@@ -10,7 +10,7 @@
 
 - 主要ライブラリは、採用理由、代替、検証方法を必ず持つ。
 - Web実装は研究室運用を優先し、P0ではNext.js、FastAPI、Supabaseの小さな構成で開始する。詳細は[Web実装詳細設計](web-implementation-design.md)を正本にする。
-- Unity GVRM RuntimeはOpenSourceの`naruya/gaussian-vrm`を資産生成・仕様参照に使い、人間Gaussian Splatting scanをVRM骨格で動かすruntimeとして実装する。
+- Unity GVRM RuntimeはOpenSourceの`naruya/gaussian-vrm`を資産生成・仕様参照に使い、人間Gaussian Splatting scanをVRM骨格で動かすruntimeとして実装する。実装ロジックは[Unity GVRM Runtime Logic](unity-gvrm-runtime-logic.md)を正本にする。
 - OpenAPI、JSON Schema、DB migration、Unity Test Frameworkで検証可能な境界を作る。
 - P0では動作確認を優先し、P1以降で分離・高速化する。
 
