@@ -1,6 +1,27 @@
 ﻿# ChimericAvatar
 
+ChimericAvatar is an applied fork / derivative project built on top of
+[naruya/gaussian-vrm](https://github.com/naruya/gaussian-vrm).
+
+The original Gaussian-VRM project provides the `.gvrm` format, browser runtime,
+and preprocessing reference implementation for binding Gaussian Splat avatars to
+VRM skeletons. This repository extends that foundation into a production-oriented
+Chimera Presenter stack: Next.js dashboard, FastAPI build backend, Supabase
+session storage, Fly.io worker deployment, and Unity/XR runtime integration.
+
+GitHub intentionally keeps this repository as a fork of `naruya/gaussian-vrm` so
+the provenance is visible. Changes here are for ChimericAvatar and are not
+automatically reflected back into the upstream repository.
+
 Chimera Presenterの本番設計方針を管理するリポジトリです。
+
+## Upstream Attribution
+
+- Upstream: [naruya/gaussian-vrm](https://github.com/naruya/gaussian-vrm)
+- Upstream license: MIT
+- Vendored runtime/reference files: [apps/dashboard/lib/gvrm-vendor](apps/dashboard/lib/gvrm-vendor)
+- Local focus: server-side `.gvrm` build pipeline, static web preview,
+  Scaniverse PLY handling, and XR runtime assets
 
 設計方針:
 

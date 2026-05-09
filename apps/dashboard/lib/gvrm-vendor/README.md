@@ -20,9 +20,21 @@ gives us that direct access.
 
 ## Modifications
 
-**None to the vendored .js files.** We resolve naruya's unscoped
-`'gaussian-splats-3d'` specifier to `@mkkellogg/gaussian-splats-3d` via
-a webpack alias in `next.config.ts` rather than editing the source.
+This directory starts from `naruya/gaussian-vrm` and keeps the upstream layout
+visible. Local changes are intentionally narrow and are made for ChimericAvatar's
+dashboard/backend integration:
+
+- `gvrm-format/gs.js` keeps the upstream Gaussian rendering quality settings
+  (`sphericalHarmonicsDegree: 2`, alpha threshold `0`) while using the local
+  loader path needed by the dashboard.
+- `gvrm-format/gvrm.js` adds ChimericAvatar preview/build integration, including
+  static `.gvrm` preview loading and server-emitted binding metadata handling.
+- `gvrm-format/ply.js` includes a binary-lossless PLY split path so SH,
+  covariance, scale, rotation, opacity, and color properties are preserved.
+- `apps/preprocess/` remains the upstream browser-side reference pipeline used
+  for design parity and comparison.
+
+The original MIT license is preserved in `LICENSE.txt`.
 
 ## Updating
 
