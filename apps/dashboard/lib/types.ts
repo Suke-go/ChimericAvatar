@@ -62,9 +62,28 @@ export type PreviewCue = {
 };
 
 export type AssetDownloadUrl = {
-  url: string;
+  /**
+   * Null when the underlying storage object is gone (DB row exists but the
+   * bucket / volume no longer has the file). The dashboard should treat that
+   * as "render reupload UI", not as an error.
+   */
+  url: string | null;
   expires_at: number;
   mime_type?: string | null;
+  missing?: boolean;
+  missing_reason?: "object_not_found" | "asset_record_missing" | null;
+};
+
+/**
+ * Single entry in {@link RuntimeManifest.missing}. The API auto-marks
+ * Asset.status = "missing" when this happens, so the next call won't have to
+ * round-trip to the storage backend.
+ */
+export type ManifestMissingEntry = {
+  kind: string;
+  assetId: string | null;
+  fileName: string | null;
+  reason: "object_not_found" | "asset_record_missing";
 };
 
 export type RuntimeManifest = {
@@ -72,6 +91,21 @@ export type RuntimeManifest = {
   sessionCode: string;
   issuedAt: string;
   expiresAt: string;
+  /**
+   * True when at least one blocker / missing-asset entry is present. Consumers
+   * should still attempt to load the manifest; this is a hint to surface
+   * "this session is not fully prepared" UI.
+   */
+  incomplete?: boolean;
+  blockers?: string[];
+  missing?: ManifestMissingEntry[];
+};
+
+export type RuntimeEntry = {
+  session_code: string;
+  join_token: string;
+  join_uri: string;
+  expires_at: string;
 };
 
 export type KnowledgeDocument = {

@@ -47,6 +47,8 @@ export default function PreviewClient({ sessionId }: { sessionId: string }) {
     timersRef.current = [];
   }
 
+  const [posterImageMissing, setPosterImageMissing] = useState(false);
+
   useEffect(() => {
     if (!sessionId) return;
     Promise.all([fetchPoster(sessionId), fetchPanels(sessionId), fetchPreviewCues(sessionId)]).then(
@@ -55,9 +57,23 @@ export default function PreviewClient({ sessionId }: { sessionId: string }) {
         setPanels(panelData);
         setCues(cueData);
         if (posterData.poster_asset_id) {
-          fetchPosterImageUrl(sessionId).then((signedUrl) => setPosterImageUrl(signedUrl.url));
+          // The API now returns { url: null, missing: true } instead of a 502
+          // when the bucket has lost the object. Surface that to the UI as a
+          // re-upload prompt rather than a crash.
+          fetchPosterImageUrl(sessionId)
+            .then((signedUrl) => {
+              setPosterImageUrl(signedUrl.url ?? null);
+              setPosterImageMissing(Boolean(signedUrl.missing));
+            })
+            .catch((err) => {
+              // Genuine errors (auth, network) — still degrade gracefully.
+              console.warn("Preview: poster image url fetch failed", err);
+              setPosterImageUrl(null);
+              setPosterImageMissing(true);
+            });
         } else {
           setPosterImageUrl(null);
+          setPosterImageMissing(false);
         }
       },
     );
@@ -147,6 +163,14 @@ export default function PreviewClient({ sessionId }: { sessionId: string }) {
         <div className={`poster-frame ${poster?.orientation === "landscape" ? "landscape" : ""}`}>
           {posterImageUrl ? (
             <img alt="Poster" className="poster-image" src={posterImageUrl} />
+          ) : posterImageMissing ? (
+            <div className="poster-image poster-image-missing" role="alert">
+              <strong>Poster image is missing</strong>
+              <span className="muted">
+                The DB still references this image, but the storage backend reports it as
+                deleted. Re-upload it from the Poster tab to restore the preview.
+              </span>
+            </div>
           ) : null}
           {panels.map((panel) => (
             <div

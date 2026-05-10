@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import logging
 import time
 from functools import lru_cache
 from pathlib import Path
@@ -12,6 +13,31 @@ import httpx
 from fastapi import HTTPException, UploadFile, status
 
 from app.core.config import get_settings
+
+
+# Asset.status values — kept as plain strings (the column is varchar(32)) so we
+# never need a migration to add a new state. Callers should treat the column
+# as a small enum: anything unknown means "trust the row, don't auto-mark it
+# missing without explicit cause".
+ASSET_STATUS_UPLOADING = "uploading"  # bytes still in flight (reserved; not used yet)
+ASSET_STATUS_READY = "ready"          # default healthy state
+ASSET_STATUS_MISSING = "missing"      # storage backend reports the object as gone
+ASSET_STATUS_FAILED = "failed"        # processing pipeline rejected the upload
+
+
+class StorageObjectMissing(Exception):
+    """Raised by ObjectStorage backends when the underlying object cannot be
+    found at the recorded `storage_path`. This is the operational error we want
+    to recover from gracefully (DB row → Asset row exists, but the bucket /
+    filesystem no longer has the file). Distinct from generic 5xx so callers
+    can self-heal: mark the Asset row as `missing` and surface that to the UI
+    instead of crashing the whole manifest with a 502.
+    """
+
+    def __init__(self, storage_path: str, reason: str) -> None:
+        super().__init__(f"storage object missing: {storage_path} ({reason})")
+        self.storage_path = storage_path
+        self.reason = reason
 
 
 class ObjectStorage(Protocol):
@@ -113,6 +139,15 @@ class LocalStorage:
 
     def signed_download_url(self, asset_id, storage_path, ttl_seconds=None):
         settings = get_settings()
+        # Verify the file is actually present on the volume before issuing a
+        # signed URL. The HMAC check at /assets/{id}/download will succeed
+        # whether the bytes exist or not, so without this guard the runtime
+        # client would only learn about a missing file after attempting the
+        # download — by which point the Preview page has already loaded a
+        # broken <img>. Surface the missing state up-front instead.
+        target = self.resolve_public_path(storage_path)
+        if not target.is_file():
+            raise StorageObjectMissing(storage_path, "local file not found")
         expires_at = int(time.time()) + (ttl_seconds or settings.asset_url_ttl_seconds)
         message = f"{asset_id}.{expires_at}".encode("utf-8")
         signature = hmac.new(
@@ -332,6 +367,38 @@ class SupabaseStorage:
         except httpx.HTTPError as exc:
             raise HTTPException(status_code=502, detail=f"Supabase sign failed: {exc}") from exc
         if response.status_code >= 400:
+            body_text = response.text or ""
+            # Supabase wraps storage errors in a JSON envelope where the outer
+            # HTTP status is 400 but the inner statusCode is the real error
+            # ("404", "not_found"). Treat that as a missing-object signal so
+            # callers can degrade gracefully instead of throwing a generic 502
+            # that crashes manifest builds.
+            #
+            # Match on the parsed JSON when possible (whitespace-insensitive)
+            # and fall back to substring scanning so a malformed body still
+            # gets recognized.
+            looks_missing = response.status_code == 404
+            if not looks_missing and body_text:
+                try:
+                    parsed = response.json()
+                except Exception:
+                    parsed = None
+                if isinstance(parsed, dict):
+                    if str(parsed.get("statusCode")) == "404":
+                        looks_missing = True
+                    elif parsed.get("error") == "not_found":
+                        looks_missing = True
+                    elif (parsed.get("message") or "").lower() == "object not found":
+                        looks_missing = True
+                if not looks_missing:
+                    compact = "".join(body_text.split()).lower()
+                    looks_missing = (
+                        '"statuscode":"404"' in compact
+                        or '"error":"not_found"' in compact
+                        or '"message":"objectnotfound"' in compact
+                    )
+            if looks_missing:
+                raise StorageObjectMissing(storage_path, "supabase reports object not found")
             raise HTTPException(
                 status_code=502,
                 detail=f"Supabase sign failed: {response.status_code} {response.text[:200]}",
@@ -368,11 +435,9 @@ def reset_storage_cache() -> None:
 # These are transient — `avatar_build.py` deletes them after the .gvrm is
 # produced — so single-AZ Fly volume durability is acceptable.
 #
-# Avatar OUTPUT (avatar-gvrm) intentionally NOT in this set: it follows the
-# configured STORAGE_BACKEND so production can lean on Supabase's replicated
-# durability for the long-lived artifact. SPZ-bundled .gvrm files are ~15MB
-# (well under the 50MB cap); PLY-bundled .gvrm builds get rejected at build
-# time with a "re-export as .spz" hint (see avatar_build.py).
+# Avatar OUTPUT (avatar-gvrm) can follow the configured STORAGE_BACKEND when
+# AVATAR_GVRM_STORAGE_BACKEND=configured. It defaults to local because raw
+# PLY-backed .gvrm files can exceed small Supabase plan limits.
 #
 # Trade-off: the API server must still be single-instance for source assets
 # to stay reachable across requests + builds. Multi-instance API would need
@@ -381,22 +446,17 @@ LOCAL_AVATAR_KINDS = {
     "avatar-scaniverse-ply",
     "avatar-scaniverse-spz",
     "avatar-base-vrm",
-    # avatar-gvrm sits here too: the in-browser preview viewer (vendored
-    # naruya/gvrm.js) uses mkkellogg/gaussian-splats-3d 0.4.7, which only
-    # decodes SPZ format versions 1-2. The current Niantic spz binding
-    # outputs version 4, so we can't use SPZ for the bundled splat data
-    # without a hard format-mismatch crash. Fall back to bundling raw PLY,
-    # which exceeds Supabase Free's 50MB/file cap on real Scaniverse scans
-    # (~70MB), so .gvrm goes back to the local Fly volume. Single-AZ
-    # durability traded for end-to-end browser preview compatibility.
-    "avatar-gvrm",
 }
 
 
 def storage_for_kind(kind: str | None) -> ObjectStorage:
     """Pick the right backend for an asset of the given kind.
-    Avatar source uploads always go local (transient, large); everything else
-    (including the avatar-gvrm output) uses the configured backend."""
+    Avatar source uploads and the current avatar-gvrm output go local; everything
+    else uses the configured backend."""
+    if kind == "avatar-gvrm":
+        if get_settings().avatar_gvrm_storage_backend == "configured":
+            return get_storage()
+        return LocalStorage()
     if kind in LOCAL_AVATAR_KINDS:
         return LocalStorage()
     return get_storage()
@@ -404,3 +464,48 @@ def storage_for_kind(kind: str | None) -> ObjectStorage:
 
 def storage_for_asset(asset) -> ObjectStorage:
     return storage_for_kind(getattr(asset, "kind", None))
+
+
+def try_sign_asset(
+    db,
+    asset,
+    *,
+    ttl_seconds: int | None = None,
+) -> tuple[str, int] | None:
+    """Sign a download URL for an Asset row, but return ``None`` (without
+    raising) if the underlying storage object is gone.
+
+    On a missing-object outcome we mark the Asset row as ``missing`` and
+    commit so subsequent callers don't have to round-trip to Supabase /
+    filesystem to re-discover the same fact. The caller decides whether to
+    surface the missing state to the user (manifest builder), serve a
+    placeholder (poster image endpoint), or omit the field entirely.
+
+    Generic non-404 errors (network blip, auth failure, JSON parse error)
+    still raise so the caller can decide between a 502 and a retry. Only the
+    "object truly does not exist" case is converted to ``None`` here.
+    """
+    if asset is None:
+        return None
+    try:
+        return storage_for_asset(asset).signed_download_url(
+            asset.id, asset.storage_path, ttl_seconds
+        )
+    except StorageObjectMissing as exc:
+        logger = logging.getLogger(__name__)
+        logger.warning(
+            "asset %s storage object missing (kind=%s, path=%s, reason=%s); marking Asset.status=missing",
+            getattr(asset, "id", None),
+            getattr(asset, "kind", None),
+            exc.storage_path,
+            exc.reason,
+        )
+        if getattr(asset, "status", None) != ASSET_STATUS_MISSING:
+            asset.status = ASSET_STATUS_MISSING
+            try:
+                db.commit()
+            except Exception:
+                # Don't let a stray DB error mask the real "missing" outcome.
+                # Best-effort self-heal: the next request will retry.
+                db.rollback()
+        return None

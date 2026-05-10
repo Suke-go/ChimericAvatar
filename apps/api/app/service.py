@@ -632,26 +632,68 @@ def signed_asset_url(db: Session, asset_id: str, ttl_seconds: int | None = None)
     return storage_for_asset(asset).signed_download_url(asset.id, asset.storage_path, ttl_seconds)
 
 
-def create_runtime_token(session_code: str, ttl_seconds: int | None = None) -> tuple[str, int]:
+def _create_scoped_token(scope: str, session_code: str, ttl_seconds: int, extra: str = "") -> tuple[str, int]:
     settings = get_settings()
-    expires_at = int(time.time()) + (ttl_seconds or settings.asset_url_ttl_seconds)
-    message = f"runtime:{session_code}.{expires_at}".encode("utf-8")
+    expires_at = int(time.time()) + ttl_seconds
+    message = f"{scope}:{session_code}:{extra}.{expires_at}".encode("utf-8")
     signature = hmac.new(settings.asset_url_secret.encode("utf-8"), message, hashlib.sha256).hexdigest()
     return f"{expires_at}.{signature}", expires_at
 
 
-def verify_runtime_token(session_code: str, token: str) -> None:
+def _verify_scoped_token(scope: str, session_code: str, token: str, extra: str = "") -> None:
     try:
         expires_text, signature = token.split(".", 1)
         expires_at = int(expires_text)
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid runtime token") from exc
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=f"Invalid {scope} token") from exc
     if expires_at < int(time.time()):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Runtime token expired")
-    message = f"runtime:{session_code}.{expires_at}".encode("utf-8")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=f"{scope} token expired")
+    message = f"{scope}:{session_code}:{extra}.{expires_at}".encode("utf-8")
     expected = hmac.new(get_settings().asset_url_secret.encode("utf-8"), message, hashlib.sha256).hexdigest()
     if not hmac.compare_digest(signature, expected):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid runtime token")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=f"Invalid {scope} token")
+
+
+def create_runtime_join_token(session_code: str, ttl_seconds: int | None = None) -> tuple[str, int]:
+    settings = get_settings()
+    return _create_scoped_token("join", session_code, ttl_seconds or settings.runtime_join_token_ttl_seconds)
+
+
+def verify_runtime_join_token(session_code: str, token: str) -> None:
+    _verify_scoped_token("join", session_code, token)
+
+
+def create_runtime_token(session_code: str, ttl_seconds: int | None = None) -> tuple[str, int]:
+    settings = get_settings()
+    return _create_scoped_token("runtime", session_code, ttl_seconds or settings.runtime_token_ttl_seconds)
+
+
+def verify_runtime_token(session_code: str, token: str) -> None:
+    _verify_scoped_token("runtime", session_code, token)
+
+
+def create_runtime_refresh_token(session_code: str, device_id: str, ttl_seconds: int | None = None) -> tuple[str, int]:
+    settings = get_settings()
+    expires_at = int(time.time()) + (ttl_seconds or settings.runtime_refresh_token_ttl_seconds)
+    message = f"refresh:{session_code}:{device_id}.{expires_at}".encode("utf-8")
+    signature = hmac.new(settings.asset_url_secret.encode("utf-8"), message, hashlib.sha256).hexdigest()
+    return f"{session_code}.{device_id}.{expires_at}.{signature}", expires_at
+
+
+def verify_runtime_refresh_token(refresh_token: str) -> tuple[str, str]:
+    try:
+        payload, signature = refresh_token.rsplit(".", 1)
+        session_code, device_id, expires_text = payload.split(".", 2)
+        expires_at = int(expires_text)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid refresh token") from exc
+    if expires_at < int(time.time()):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Refresh token expired")
+    message = f"refresh:{session_code}:{device_id}.{expires_at}".encode("utf-8")
+    expected = hmac.new(get_settings().asset_url_secret.encode("utf-8"), message, hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(signature, expected):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid refresh token")
+    return session_code, device_id
 
 
 def regenerate_cues_from_script(
@@ -2235,6 +2277,209 @@ def record_voice_consent(
 def list_voice_consents(db: Session, session_id: str) -> list[VoiceConsent]:
     stmt = select(VoiceConsent).where(VoiceConsent.session_id == session_id).order_by(VoiceConsent.created_at.desc())
     return list(db.scalars(stmt))
+
+
+# ElevenLabs Instant Voice Cloning. Audio sample size limits:
+#   * Each sample: <= 10MB raw bytes (Starter+ plan limit)
+#   * Total request: <= ~25MB combined (transport / Fly proxy headroom)
+# These caps are intentionally narrower than ElevenLabs' nominal 11MB/sample
+# so a stray giant WAV doesn't fail at the 502 layer. We accept the common
+# browser-MediaRecorder formats plus what ElevenLabs documents as supported.
+VOICE_CLONE_MAX_SAMPLE_BYTES = 10 * 1024 * 1024
+VOICE_CLONE_MAX_TOTAL_BYTES = 25 * 1024 * 1024
+VOICE_CLONE_ACCEPTED_MIME_PREFIXES = ("audio/",)
+VOICE_CLONE_ACCEPTED_MIME_TYPES = {
+    # Mostly browser MediaRecorder + common upload formats. ElevenLabs
+    # accepts more than this, but we whitelist to avoid forwarding random
+    # binaries (e.g. a video file the user grabbed by mistake) and only
+    # discovering the rejection 5+ seconds into the upload.
+    "audio/mpeg",         # .mp3
+    "audio/mp3",          # .mp3 (some browsers report this)
+    "audio/wav",          # .wav
+    "audio/wave",
+    "audio/x-wav",
+    "audio/webm",         # MediaRecorder default on Chromium
+    "audio/ogg",
+    "audio/ogg; codecs=opus",
+    "audio/m4a",
+    "audio/mp4",          # .m4a / aac in mp4 container
+    "audio/x-m4a",
+    "audio/flac",
+    "audio/aac",
+}
+
+
+async def clone_voice_for_session(
+    db: Session,
+    session_id: str,
+    current_user: CurrentUser,
+    *,
+    name: str,
+    description: str | None,
+    consent_label: str,
+    files: list[UploadFile],
+    set_as_session_voice: bool = True,
+    remove_background_noise: bool = False,
+) -> tuple[str, VoiceConsent, AvatarConfig | None]:
+    """Forward a multipart audio bundle to ElevenLabs Instant Voice Cloning,
+    record consent, and (by default) wire the resulting voice ID into the
+    session's AvatarConfig so subsequent TTS preview / synthesis uses it.
+
+    Returns ``(voice_id, consent_row, updated_avatar_config)``. The
+    avatar_config is ``None`` when ``set_as_session_voice=False`` so the
+    caller can audition the cloned voice before committing it.
+
+    Failure modes we deliberately surface up the stack:
+
+    - ElevenLabs API key absent → 503 (operator config issue)
+    - Plan doesn't allow cloning → forward ElevenLabs' own 4xx body so the
+      operator sees "Subscription does not allow voice cloning" verbatim
+    - Sample too large / wrong type → 422 with the offending file name so
+      the user knows which take to re-record
+
+    Auto-heal contract (matches Tier 1/2/3): if the operator passes
+    ``set_as_session_voice=False`` and ElevenLabs succeeds but our DB
+    write fails, the voice ID still exists upstream; we don't try to
+    delete it because that would silently nuke a manual rebind path.
+    """
+    settings = get_settings()
+    if not settings.elevenlabs_api_key:
+        raise HTTPException(
+            status_code=503,
+            detail="ElevenLabs API key not configured on this server",
+        )
+    cleaned_name = (name or "").strip()
+    if not cleaned_name:
+        raise HTTPException(status_code=422, detail="Voice name is required")
+    if len(cleaned_name) > 80:
+        raise HTTPException(status_code=422, detail="Voice name must be 80 characters or fewer")
+    cleaned_consent = (consent_label or "").strip()
+    if not cleaned_consent:
+        raise HTTPException(
+            status_code=422,
+            detail="Consent label is required (operator must explicitly affirm clone consent)",
+        )
+    if not files:
+        raise HTTPException(status_code=422, detail="At least one audio sample is required")
+    if len(files) > 10:
+        raise HTTPException(status_code=422, detail="Up to 10 audio samples per clone request")
+
+    # Read all samples eagerly so we can validate sizes / MIME up-front
+    # and produce a helpful error before invoking ElevenLabs. Memory cost
+    # is bounded by VOICE_CLONE_MAX_TOTAL_BYTES.
+    sample_payloads: list[tuple[str, bytes, str]] = []
+    total_bytes = 0
+    for upload in files:
+        mime = (upload.content_type or "").lower()
+        accepted = mime in VOICE_CLONE_ACCEPTED_MIME_TYPES or any(
+            mime.startswith(prefix) for prefix in VOICE_CLONE_ACCEPTED_MIME_PREFIXES
+        )
+        if not accepted:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"Unsupported audio MIME type for {upload.filename!r}: {mime!r}. "
+                    "Supported: mp3, wav, m4a, ogg, webm, flac."
+                ),
+            )
+        body = await upload.read()
+        size = len(body)
+        if size == 0:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Audio sample {upload.filename!r} is empty",
+            )
+        if size > VOICE_CLONE_MAX_SAMPLE_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=(
+                    f"Audio sample {upload.filename!r} is too large "
+                    f"({size // 1024}KB > {VOICE_CLONE_MAX_SAMPLE_BYTES // 1024}KB)."
+                ),
+            )
+        total_bytes += size
+        if total_bytes > VOICE_CLONE_MAX_TOTAL_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=(
+                    f"Combined audio samples exceed {VOICE_CLONE_MAX_TOTAL_BYTES // 1024}KB. "
+                    "Trim the longest take and retry."
+                ),
+            )
+        sample_payloads.append(
+            (upload.filename or f"sample-{len(sample_payloads) + 1}.bin", body, mime)
+        )
+
+    # Build the multipart payload for ElevenLabs. Their docs name the file
+    # field `files` (not `files[]`); httpx serializes a list of (name, ...)
+    # tuples as repeated fields with the same name.
+    multipart_files: list[tuple[str, tuple[str, bytes, str]]] = [
+        ("files", (filename, body, mime)) for (filename, body, mime) in sample_payloads
+    ]
+    form_data = {
+        "name": cleaned_name,
+        "remove_background_noise": "true" if remove_background_noise else "false",
+    }
+    if description:
+        # ElevenLabs caps description at ~500 chars; trim defensively.
+        form_data["description"] = description.strip()[:500]
+
+    url = "https://api.elevenlabs.io/v1/voices/add"
+    headers = {"xi-api-key": settings.elevenlabs_api_key}
+    try:
+        # 120s ceiling: large samples + ElevenLabs' background processing
+        # can stretch past the default 5s connect / 30s read.
+        async with httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=15.0)) as client:
+            response = await client.post(url, headers=headers, data=form_data, files=multipart_files)
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=f"ElevenLabs voice clone request failed: {exc}") from exc
+
+    if response.status_code >= 400:
+        # Surface ElevenLabs' error body to the operator. Common cases:
+        #   401 — API key invalid
+        #   403 / 422 — plan does not allow cloning, or quota exceeded
+        #   429 — rate limit
+        body_text = (response.text or "")[:400]
+        raise HTTPException(
+            status_code=502 if response.status_code >= 500 else response.status_code,
+            detail=f"ElevenLabs voice clone failed: {response.status_code} {body_text}",
+        )
+
+    try:
+        body = response.json()
+    except Exception:
+        body = {}
+    new_voice_id = (body or {}).get("voice_id")
+    if not new_voice_id:
+        raise HTTPException(
+            status_code=502,
+            detail="ElevenLabs voice clone returned no voice_id",
+        )
+
+    consent_row = record_voice_consent(
+        db,
+        session_id=session_id,
+        current_user=current_user,
+        voice_id=new_voice_id,
+        consent_label=cleaned_consent,
+        notes=f"Cloned via dashboard: name={cleaned_name!r}, samples={len(sample_payloads)}",
+    )
+
+    updated_config: AvatarConfig | None = None
+    if set_as_session_voice:
+        config = db.get(AvatarConfig, session_id)
+        if config is None:
+            # Session has no avatar row yet — create one with default values
+            # so the freshly-cloned voice doesn't get orphaned.
+            config = AvatarConfig(session_id=session_id, voice_id=new_voice_id)
+            db.add(config)
+        else:
+            config.voice_id = new_voice_id
+        db.commit()
+        db.refresh(config)
+        updated_config = config
+
+    return new_voice_id, consent_row, updated_config
 
 
 _VOICE_SAMPLE_DEFAULT_TEXT_JA = (

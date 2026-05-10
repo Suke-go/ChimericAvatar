@@ -1,12 +1,13 @@
 ﻿"use client";
 
 import dynamic from "next/dynamic";
-import type { FormEvent, ReactNode } from "react";
-import { useEffect, useMemo, useState } from "react";
+import type { ChangeEvent, FormEvent, ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import SessionWorkspace from "../../../../components/SessionWorkspace";
 import { useTaskTracker } from "../../../../lib/useTaskTracker";
 import {
+  cloneVoiceForSession,
   enqueueAvatarBuild,
   fetchAvatarBuilds,
   fetchAvatarConfig,
@@ -14,6 +15,7 @@ import {
   updateAvatarConfig,
   uploadAvatarSource,
   uploadGvrmArchive,
+  type VoiceCloneResult,
   type VoiceSample,
 } from "../../../../lib/api";
 import { AvatarBuildJob, AvatarConfig, AvatarRuntimeType } from "../../../../lib/types";
@@ -455,10 +457,12 @@ export default function AvatarClient({ sessionId }: { sessionId: string }) {
             <PreviewPanel config={config} />
           )}
 
-          {/* === Voice === ElevenLabs voice ID input + preview audio.
-              Cached server-side per (voice_id, text, lang) so repeat
-              previews don't burn ElevenLabs credits. */}
+          {/* === Voice === ElevenLabs voice ID input + record / clone /
+              upload + preview audio. Cached server-side per
+              (voice_id, text, lang) so repeat previews don't burn
+              ElevenLabs credits. */}
           <VoicePanel
+            sessionId={sessionId}
             config={config}
             busy={busy}
             onSaveVoiceId={(voiceId) =>
@@ -467,6 +471,15 @@ export default function AvatarClient({ sessionId }: { sessionId: string }) {
                 setConfig(updated);
               })
             }
+            onCloned={(result) => {
+              if (result.avatar_voice_id_set) {
+                // Refresh the local config view so the new voice ID shows
+                // up immediately in the input + drives the preview.
+                setConfig((current) =>
+                  current ? { ...current, voice_id: result.voice_id } : current,
+                );
+              }
+            }}
           />
 
           {/* === STEP 3: ready / placement === */}
@@ -974,21 +987,47 @@ function UploadCard({
   );
 }
 
+type VoiceMode = "paste" | "record" | "upload";
+
+const VOICE_MODE_LABELS: Record<VoiceMode, string> = {
+  paste: "Paste voice ID",
+  record: "Record",
+  upload: "Upload audio",
+};
+
+const RECORD_HARD_LIMIT_SEC = 180;
+
 /**
- * Voice ID input + cached TTS preview. The session's voice_id persists in
- * AvatarConfig (overrides ELEVENLABS_DEFAULT_VOICE_ID for this session
- * only). Previews are cached server-side keyed by (voice_id, text, lang)
- * so retrying never burns ElevenLabs API credits beyond the first call.
+ * Voice ID + in-app cloning panel.
+ *
+ * Three modes:
+ *   - **paste**: paste a voice ID created on ElevenLabs Voice Lab
+ *   - **record**: capture audio in-browser (MediaRecorder), then clone
+ *   - **upload**: pick an audio file (mp3/wav/m4a/webm/...) and clone
+ *
+ * The session's voice_id persists in AvatarConfig (overrides
+ * ELEVENLABS_DEFAULT_VOICE_ID for this session only). Previews are cached
+ * server-side keyed by (voice_id, text, lang) so retrying a preview never
+ * burns ElevenLabs API credits beyond the first call.
+ *
+ * Cloning forwards audio to the API, which calls ElevenLabs IVC
+ * server-side and writes a VoiceConsent row. The dashboard never touches
+ * the ElevenLabs API key directly.
  */
 function VoicePanel({
+  sessionId,
   config,
   busy,
   onSaveVoiceId,
+  onCloned,
 }: {
+  sessionId: string;
   config: AvatarConfig;
   busy: boolean;
   onSaveVoiceId: (voiceId: string) => void;
+  onCloned?: (result: VoiceCloneResult) => void;
 }) {
+  const [mode, setMode] = useState<VoiceMode>("paste");
   const [voiceIdDraft, setVoiceIdDraft] = useState(config.voice_id ?? "");
   const [text, setText] = useState("");
   const [sample, setSample] = useState<VoiceSample | null>(null);
@@ -1023,21 +1062,69 @@ function VoicePanel({
     }
   }
 
+  // After a successful clone we want to immediately verify by playing the
+  // freshly-cloned voice — operators almost always want the preview next.
+  async function previewClonedVoice(voiceId: string) {
+    try {
+      const result = await generateVoiceSample({
+        voice_id: voiceId,
+        text: text.trim() || undefined,
+        language: "ja",
+      });
+      setSample(result);
+    } catch {
+      // Preview failure shouldn't fail the clone flow itself.
+    }
+  }
+
   return (
     <section className="panel">
       <div className="panel-title">
         <span className="marker" />
         VOICE
-        <span className="panel-subtitle">// ElevenLabs voice ID + cached preview</span>
+        <span className="panel-subtitle">// ElevenLabs voice ID + clone + cached preview</span>
       </div>
-      <p className="hint" style={{ marginBottom: 12 }}>
-        Clone or pick a voice in the{" "}
-        <a href="https://elevenlabs.io/app/voice-lab" target="_blank" rel="noreferrer" style={{ color: "var(--phos)" }}>
-          ElevenLabs Voice Lab
-        </a>
-        , then paste the voice ID here. The same (voice ID + sample text) tuple is cached on the server,
-        so re-clicking <em>Generate preview</em> reuses the audio without spending ElevenLabs credits.
-      </p>
+      <div className="row" style={{ gap: 8, marginBottom: 12 }}>
+        {(Object.keys(VOICE_MODE_LABELS) as VoiceMode[]).map((m) => (
+          <button
+            key={m}
+            type="button"
+            className={`button ${mode === m ? "" : "secondary"}`}
+            onClick={() => {
+              setMode(m);
+              setError(null);
+            }}
+          >
+            {VOICE_MODE_LABELS[m]}
+          </button>
+        ))}
+      </div>
+
+      {mode === "paste" && (
+        <p className="hint" style={{ marginBottom: 12 }}>
+          Already have a voice on{" "}
+          <a href="https://elevenlabs.io/app/voice-lab" target="_blank" rel="noreferrer" style={{ color: "var(--phos)" }}>
+            ElevenLabs Voice Lab
+          </a>
+          ? Paste the voice ID below. Re-clicking <em>Generate preview</em> reuses cached audio so no
+          extra ElevenLabs credits are spent.
+        </p>
+      )}
+      {mode === "record" && (
+        <p className="hint" style={{ marginBottom: 12 }}>
+          Record up to {RECORD_HARD_LIMIT_SEC}s of speech. The audio stays in your browser until you
+          click <em>Clone voice</em>; the server then forwards it to ElevenLabs Instant Voice Cloning
+          and saves your consent.
+        </p>
+      )}
+      {mode === "upload" && (
+        <p className="hint" style={{ marginBottom: 12 }}>
+          Upload one or more audio files (mp3 / wav / m4a / webm / flac). Up to 10 files, 10 MB each.
+          Server forwards them to ElevenLabs IVC; the consent label you provide is recorded for
+          compliance.
+        </p>
+      )}
+
       <div className="grid two">
         <div className="stack">
           <div className="field">
@@ -1061,8 +1148,30 @@ function VoicePanel({
               Empty = use server default
             </span>
           </div>
+
+          {mode === "record" && (
+            <RecordCloneForm
+              sessionId={sessionId}
+              onCloned={(result) => {
+                setVoiceIdDraft(result.voice_id);
+                onCloned?.(result);
+                void previewClonedVoice(result.voice_id);
+              }}
+            />
+          )}
+          {mode === "upload" && (
+            <UploadCloneForm
+              sessionId={sessionId}
+              onCloned={(result) => {
+                setVoiceIdDraft(result.voice_id);
+                onCloned?.(result);
+                void previewClonedVoice(result.voice_id);
+              }}
+            />
+          )}
+
           <div className="field">
-            <label>Sample text (optional)</label>
+            <label>Preview text (optional)</label>
             <textarea
               rows={3}
               value={text}
@@ -1092,10 +1201,10 @@ function VoicePanel({
             <>
               <p className="hint">
                 <span className={`badge ${sample.cached ? "" : "amber"}`}>
-                  {sample.cached ? "笙ｻ cached (no API call)" : "笨ｱ fresh (API call made)"}
+                  {sample.cached ? "✓ cached (no API call)" : "✱ fresh (API call made)"}
                 </span>
               </p>
-              <audio controls src={sample.audio_url} style={{ width: "100%" }} />
+              <audio controls src={sample.audio_url ?? undefined} style={{ width: "100%" }} />
               <p className="hint" style={{ fontSize: 11 }}>
                 {sample.text}
               </p>
@@ -1105,11 +1214,312 @@ function VoicePanel({
             </>
           ) : (
             <p className="hint" style={{ marginTop: 32, textAlign: "center", opacity: 0.6 }}>
-              Generate a preview to verify the voice
+              Record / upload / paste a voice, then generate a preview.
             </p>
           )}
         </div>
       </div>
     </section>
+  );
+}
+
+/**
+ * In-browser voice recorder. Uses MediaRecorder to capture the default mic
+ * stream; we don't pin a codec because Chromium / Firefox / Safari each
+ * pick a different default and ElevenLabs accepts all the common ones.
+ *
+ * Hard-stops at RECORD_HARD_LIMIT_SEC so a stuck tab doesn't quietly
+ * collect minutes of audio.
+ */
+function RecordCloneForm({
+  sessionId,
+  onCloned,
+}: {
+  sessionId: string;
+  onCloned: (result: VoiceCloneResult) => void;
+}) {
+  const [recording, setRecording] = useState(false);
+  const [elapsed, setElapsed] = useState(0);
+  const [blob, setBlob] = useState<Blob | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [voiceName, setVoiceName] = useState("");
+  const [consent, setConsent] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+  const timerRef = useRef<number | null>(null);
+
+  // Always release the mic + revoke the preview URL on unmount, even if
+  // the user navigated away mid-recording.
+  useEffect(() => {
+    return () => {
+      if (timerRef.current !== null) window.clearInterval(timerRef.current);
+      streamRef.current?.getTracks().forEach((t) => t.stop());
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function startRecording() {
+    setError(null);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamRef.current = stream;
+      const recorder = new MediaRecorder(stream);
+      chunksRef.current = [];
+      recorder.ondataavailable = (event) => {
+        if (event.data && event.data.size > 0) chunksRef.current.push(event.data);
+      };
+      recorder.onstop = () => {
+        const mime = recorder.mimeType || "audio/webm";
+        const merged = new Blob(chunksRef.current, { type: mime });
+        chunksRef.current = [];
+        if (previewUrl) URL.revokeObjectURL(previewUrl);
+        const nextUrl = URL.createObjectURL(merged);
+        setPreviewUrl(nextUrl);
+        setBlob(merged);
+        streamRef.current?.getTracks().forEach((t) => t.stop());
+        streamRef.current = null;
+      };
+      recorder.start();
+      recorderRef.current = recorder;
+      setRecording(true);
+      setElapsed(0);
+      timerRef.current = window.setInterval(() => {
+        setElapsed((prev) => {
+          const next = prev + 1;
+          if (next >= RECORD_HARD_LIMIT_SEC) {
+            stopRecording();
+          }
+          return next;
+        });
+      }, 1000);
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? `Microphone access failed: ${err.message}`
+          : "Microphone access failed",
+      );
+    }
+  }
+
+  function stopRecording() {
+    if (timerRef.current !== null) {
+      window.clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+    const recorder = recorderRef.current;
+    if (recorder && recorder.state !== "inactive") {
+      recorder.stop();
+    }
+    setRecording(false);
+  }
+
+  function discardTake() {
+    if (previewUrl) URL.revokeObjectURL(previewUrl);
+    setPreviewUrl(null);
+    setBlob(null);
+  }
+
+  async function submitClone() {
+    if (!blob || !voiceName.trim() || !consent) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      // Pick a sensible filename so this take is identifiable in the
+      // ElevenLabs voice editor later.
+      const ext = (blob.type.split("/")[1] || "webm").split(";")[0];
+      const filename = `${voiceName.trim().replace(/\s+/g, "_")}-${Date.now()}.${ext}`;
+      const file = new File([blob], filename, { type: blob.type });
+      const result = await cloneVoiceForSession(sessionId, {
+        name: voiceName.trim(),
+        consent_label: "Recorded in dashboard with explicit consent checkbox.",
+        files: [file],
+      });
+      onCloned(result);
+      discardTake();
+      setVoiceName("");
+      setConsent(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Voice clone failed");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="stack" style={{ gap: 8 }}>
+      <div className="field">
+        <label>Voice name</label>
+        <input
+          value={voiceName}
+          placeholder="e.g. Presenter A — CHI 2026"
+          maxLength={80}
+          onChange={(e) => setVoiceName(e.target.value)}
+        />
+      </div>
+      <div className="row" style={{ alignItems: "center", gap: 12 }}>
+        {!recording && !blob && (
+          <button type="button" className="button" onClick={startRecording}>
+            ● Start recording
+          </button>
+        )}
+        {recording && (
+          <button type="button" className="button" onClick={stopRecording}>
+            ■ Stop ({elapsed}s)
+          </button>
+        )}
+        {!recording && blob && (
+          <>
+            <button type="button" className="button secondary" onClick={discardTake}>
+              ✕ Discard take
+            </button>
+            <button type="button" className="button secondary" onClick={startRecording}>
+              ↻ Record again
+            </button>
+          </>
+        )}
+        {recording && (
+          <span className="hint" style={{ fontSize: 11 }}>
+            max {RECORD_HARD_LIMIT_SEC}s
+          </span>
+        )}
+      </div>
+      {previewUrl && (
+        <audio controls src={previewUrl} style={{ width: "100%" }} />
+      )}
+      <label className="row" style={{ gap: 6, alignItems: "flex-start", fontSize: 12 }}>
+        <input
+          type="checkbox"
+          checked={consent}
+          onChange={(e) => setConsent(e.target.checked)}
+          style={{ marginTop: 3 }}
+        />
+        <span>
+          I confirm I am the owner of this voice or have explicit permission to clone it for this
+          presentation. Consent is recorded server-side.
+        </span>
+      </label>
+      <button
+        type="button"
+        className="button"
+        disabled={!blob || !voiceName.trim() || !consent || submitting}
+        onClick={submitClone}
+        style={{ alignSelf: "flex-start" }}
+      >
+        {submitting ? (
+          <>
+            <span className="spinner" /> Cloning...
+          </>
+        ) : (
+          "Clone voice"
+        )}
+      </button>
+      {error && <p className="hint" style={{ color: "var(--coral)" }}>{error}</p>}
+    </div>
+  );
+}
+
+/**
+ * Audio file upload → IVC. Mirrors RecordCloneForm but the audio comes
+ * from a file picker. Multi-select supported because IVC happily takes
+ * several samples and the resulting voice is more stable.
+ */
+function UploadCloneForm({
+  sessionId,
+  onCloned,
+}: {
+  sessionId: string;
+  onCloned: (result: VoiceCloneResult) => void;
+}) {
+  const [files, setFiles] = useState<File[]>([]);
+  const [voiceName, setVoiceName] = useState("");
+  const [consent, setConsent] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  function pickFiles(e: ChangeEvent<HTMLInputElement>) {
+    const next = Array.from(e.target.files ?? []);
+    setFiles(next);
+    setError(null);
+  }
+
+  async function submitClone() {
+    if (!files.length || !voiceName.trim() || !consent) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      const result = await cloneVoiceForSession(sessionId, {
+        name: voiceName.trim(),
+        consent_label: "Uploaded in dashboard with explicit consent checkbox.",
+        files,
+      });
+      onCloned(result);
+      setFiles([]);
+      setVoiceName("");
+      setConsent(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Voice clone failed");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  const totalKB = Math.round(files.reduce((sum, file) => sum + file.size, 0) / 1024);
+
+  return (
+    <div className="stack" style={{ gap: 8 }}>
+      <div className="field">
+        <label>Voice name</label>
+        <input
+          value={voiceName}
+          placeholder="e.g. Presenter A — CHI 2026"
+          maxLength={80}
+          onChange={(e) => setVoiceName(e.target.value)}
+        />
+      </div>
+      <input
+        type="file"
+        accept="audio/*"
+        multiple
+        onChange={pickFiles}
+      />
+      {files.length > 0 && (
+        <p className="hint" style={{ fontSize: 11 }}>
+          {files.length} file{files.length === 1 ? "" : "s"} · {totalKB}KB total
+        </p>
+      )}
+      <label className="row" style={{ gap: 6, alignItems: "flex-start", fontSize: 12 }}>
+        <input
+          type="checkbox"
+          checked={consent}
+          onChange={(e) => setConsent(e.target.checked)}
+          style={{ marginTop: 3 }}
+        />
+        <span>
+          I confirm I am the owner of this voice or have explicit permission to clone it for this
+          presentation. Consent is recorded server-side.
+        </span>
+      </label>
+      <button
+        type="button"
+        className="button"
+        disabled={!files.length || !voiceName.trim() || !consent || submitting}
+        onClick={submitClone}
+        style={{ alignSelf: "flex-start" }}
+      >
+        {submitting ? (
+          <>
+            <span className="spinner" /> Cloning...
+          </>
+        ) : (
+          "Clone voice"
+        )}
+      </button>
+      {error && <p className="hint" style={{ color: "var(--coral)" }}>{error}</p>}
+    </div>
   );
 }

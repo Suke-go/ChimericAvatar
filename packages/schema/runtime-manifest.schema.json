@@ -57,6 +57,35 @@
       "additionalProperties": {
         "type": "boolean"
       }
+    },
+    "incomplete": {
+      "type": "boolean",
+      "description": "True when at least one blocker or missing-asset entry is present. Consumers should still attempt to load the manifest; this is a hint to surface 'this session is not fully prepared' UI."
+    },
+    "blockers": {
+      "type": "array",
+      "description": "Stable string codes for hard-requirement gaps (poster config absent, no approved script, etc.). The dashboard uses these to render a per-tab checklist.",
+      "items": {
+        "type": "string"
+      }
+    },
+    "missing": {
+      "type": "array",
+      "description": "Per-asset entries for storage objects that could not be signed. Populated when DB has an asset row but the bucket / filesystem reports it missing — the API auto-marks Asset.status=missing when this happens.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "reason"],
+        "properties": {
+          "kind": { "type": "string", "minLength": 1 },
+          "assetId": { "type": ["string", "null"] },
+          "fileName": { "type": ["string", "null"] },
+          "reason": {
+            "type": "string",
+            "enum": ["object_not_found", "asset_record_missing"]
+          }
+        }
+      }
     }
   },
   "$defs": {
@@ -75,23 +104,23 @@
     "signedAsset": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "url", "expiresAt", "mimeType"],
+      "description": "Signed download URL for a runtime asset. When the storage object cannot be signed, the API still emits a payload with `url: null` and `missing: true` (and adds an entry to the top-level `missing` array). Consumers must check `missing` before attempting `url`.",
+      "required": ["id"],
       "properties": {
         "id": {
-          "type": "string",
+          "type": ["string", "null"],
           "minLength": 1
         },
         "url": {
-          "type": "string",
+          "type": ["string", "null"],
           "minLength": 1
         },
         "expiresAt": {
-          "type": "string",
+          "type": ["string", "null"],
           "format": "date-time"
         },
         "mimeType": {
-          "type": "string",
-          "minLength": 1
+          "type": ["string", "null"]
         },
         "sizeBytes": {
           "type": "integer",
@@ -99,13 +128,24 @@
         },
         "sha256": {
           "type": "string"
+        },
+        "fileName": {
+          "type": ["string", "null"]
+        },
+        "missing": {
+          "type": "boolean",
+          "default": false
+        },
+        "missingReason": {
+          "type": ["string", "null"],
+          "enum": ["object_not_found", "asset_record_missing", null]
         }
       }
     },
     "assets": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["posterImage"],
+      "description": "Top-level signed assets. `posterImage` may be omitted entirely when the session has no poster image configured yet — the dashboard's Preview tab tolerates this. When present but missing from storage, it carries `missing: true`.",
       "properties": {
         "posterImage": {
           "$ref": "#/$defs/signedAsset"
@@ -190,11 +230,15 @@
       "properties": {
         "type": {
           "type": "string",
-          "enum": ["xreal-image-tracking", "manual-anchor", "qr-anchor"]
+          "enum": ["fiducial-software-anchor", "xreal-image-tracking", "manual-anchor", "qr-anchor"]
         },
         "referenceImageName": {
           "type": "string",
           "minLength": 1
+        },
+        "markerCountPolicy": {
+          "type": "string",
+          "enum": ["single-primary", "single-primary-plus-optional-relock", "multi-marker-lab"]
         },
         "posterFormat": {
           "type": "string",
@@ -206,6 +250,13 @@
         },
         "physicalSizeM": {
           "$ref": "#/$defs/vec2"
+        },
+        "fiducials": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/fiducialMarker"
+          },
+          "minItems": 1
         },
         "qrFallback": {
           "type": "object",
@@ -239,6 +290,59 @@
         }
       }
     },
+    "fiducialMarker": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "sizeM", "role"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "type": "string",
+          "enum": ["apriltag", "aruco", "qr"]
+        },
+        "family": {
+          "type": "string"
+        },
+        "payload": {
+          "type": "string"
+        },
+        "sizeM": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "role": {
+          "type": "string",
+          "enum": ["primary-pose", "relock", "session-entry", "debug-calibration"]
+        },
+        "printPlacement": {
+          "type": "string"
+        },
+        "posterLocalPose": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["position", "rotation"],
+          "properties": {
+            "position": {
+              "$ref": "#/$defs/vec3"
+            },
+            "rotation": {
+              "$ref": "#/$defs/vec3"
+            }
+          }
+        },
+        "posterLocalCornersM": {
+          "type": "array",
+          "minItems": 4,
+          "maxItems": 4,
+          "items": {
+            "$ref": "#/$defs/vec3"
+          }
+        }
+      }
+    },
     "avatar": {
       "type": "object",
       "additionalProperties": false,
@@ -246,7 +350,20 @@
       "properties": {
         "runtimeType": {
           "type": "string",
-          "enum": ["unity-gvrm", "default-vrm"]
+          "enum": ["unity-gvrm", "gvrm", "scaniverse-source", "default-vrm"]
+        },
+        "format": {
+          "type": "string",
+          "enum": ["gaussian-vrm", "scaniverse-source", "vrm"]
+        },
+        "displayName": {
+          "type": ["string", "null"]
+        },
+        "attribution": {
+          "type": ["string", "null"]
+        },
+        "licenseNote": {
+          "type": ["string", "null"]
         },
         "assetBundleUrl": {
           "type": "string",
@@ -257,6 +374,15 @@
         },
         "gvrmUrl": {
           "type": "string"
+        },
+        "metadata": {
+          "type": "object"
+        },
+        "sources": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/signedAsset"
+          }
         },
         "defaultAnimation": {
           "type": "string",
@@ -273,6 +399,16 @@
             "explain": { "type": "string" },
             "listening": { "type": "string" },
             "thinking": { "type": "string" }
+          }
+        },
+        "voice": {
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "required": ["provider", "voiceId", "modelId"],
+          "properties": {
+            "provider": { "type": "string" },
+            "voiceId": { "type": "string" },
+            "modelId": { "type": "string" }
           }
         },
         "placement": {
@@ -391,6 +527,14 @@
         "websocketUrl": {
           "type": "string",
           "minLength": 1
+        },
+        "runtimeToken": {
+          "type": "string",
+          "minLength": 1
+        },
+        "runtimeTokenExpiresAt": {
+          "type": "string",
+          "format": "date-time"
         },
         "defaultProfile": {
           "type": "string",

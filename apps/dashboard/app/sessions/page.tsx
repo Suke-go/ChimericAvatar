@@ -3,8 +3,8 @@
 import Link from "next/link";
 import { FormEvent, useEffect, useState } from "react";
 
-import { createSession, fetchMe, fetchSessions, getRuntimeManifestUrl, publishSession } from "../../lib/api";
-import { CurrentUser, SessionItem } from "../../lib/types";
+import { createRuntimeEntry, createSession, fetchMe, fetchSessions, getRuntimeManifestUrl, publishSession } from "../../lib/api";
+import { CurrentUser, RuntimeEntry, SessionItem } from "../../lib/types";
 import { useTaskTracker } from "../../lib/useTaskTracker";
 
 export default function SessionsPage() {
@@ -20,6 +20,8 @@ export default function SessionsPage() {
   const [publishMessage, setPublishMessage] = useState<string | null>(null);
   const tracker = useTaskTracker();
   const [publishingId, setPublishingId] = useState<string | null>(null);
+  const [runtimeEntryId, setRuntimeEntryId] = useState<string | null>(null);
+  const [runtimeEntries, setRuntimeEntries] = useState<Record<string, RuntimeEntry>>({});
 
   async function load() {
     try {
@@ -62,9 +64,57 @@ export default function SessionsPage() {
       setPublishMessage(`Published ${updated.session_code}`);
       await load();
     } catch (err) {
-      setPublishMessage(err instanceof Error ? err.message : "Failed to publish");
+      // The API returns a structured 409 with `code: "manifest_assets_missing"`
+      // when storage objects are gone. Offer a one-click force re-publish so
+      // the operator can ship a placeholder if they know what they're doing.
+      const message = err instanceof Error ? err.message : "Failed to publish";
+      if (message.includes("manifest_assets_missing")) {
+        const proceed = window.confirm(
+          "Some storage objects referenced by this session are missing.\n\n" +
+            "Publishing now will produce a manifest with `missing: true` placeholders. " +
+            "Re-upload the missing files first if you can; otherwise force-publish to proceed.",
+        );
+        if (proceed) {
+          try {
+            const updated = await tracker.track("Force-publishing session…", () =>
+              publishSession(sessionId, { force: true }),
+            );
+            setPublishMessage(`Force-published ${updated.session_code} with missing assets`);
+            await load();
+            return;
+          } catch (forceErr) {
+            setPublishMessage(forceErr instanceof Error ? forceErr.message : "Force-publish failed");
+            return;
+          } finally {
+            setPublishingId(null);
+          }
+        }
+      }
+      setPublishMessage(message);
     } finally {
       setPublishingId(null);
+    }
+  }
+
+  async function handleRuntimeEntry(sessionId: string) {
+    setRuntimeEntryId(sessionId);
+    try {
+      const entry = await tracker.track("Creating runtime entry...", () => createRuntimeEntry(sessionId));
+      setRuntimeEntries((prev) => ({ ...prev, [sessionId]: entry }));
+      let message = `Runtime entry created for ${entry.session_code}`;
+      if (navigator.clipboard) {
+        try {
+          await navigator.clipboard.writeText(entry.join_uri);
+          message = `Runtime entry copied for ${entry.session_code}`;
+        } catch {
+          // Clipboard can be blocked on local/non-secure origins; the URI is still visible.
+        }
+      }
+      setPublishMessage(message);
+    } catch (err) {
+      setPublishMessage(err instanceof Error ? err.message : "Failed to create runtime entry");
+    } finally {
+      setRuntimeEntryId(null);
     }
   }
 
@@ -141,15 +191,40 @@ export default function SessionsPage() {
                         "Publish ↑"
                       )}
                     </button>
+                    <button
+                      className="button secondary"
+                      type="button"
+                      disabled={session.status !== "published" || runtimeEntryId === session.id}
+                      onClick={() => handleRuntimeEntry(session.id)}
+                    >
+                      {runtimeEntryId === session.id ? (
+                        <>
+                          <span className="spinner" /> Creating...
+                        </>
+                      ) : (
+                        "Unity entry"
+                      )}
+                    </button>
                   </div>
                   {session.status === "published" ? (
-                    <p
-                      className="hint"
-                      style={{ marginTop: 10, overflowWrap: "anywhere" }}
-                    >
-                      manifest:{" "}
-                      <code>{getRuntimeManifestUrl(session.session_code)}</code>
-                    </p>
+                    <>
+                      <p
+                        className="hint"
+                        style={{ marginTop: 10, overflowWrap: "anywhere" }}
+                      >
+                        manifest:{" "}
+                        <code>{getRuntimeManifestUrl(session.session_code)}</code>
+                      </p>
+                      {runtimeEntries[session.id] ? (
+                        <p
+                          className="hint"
+                          style={{ marginTop: 8, overflowWrap: "anywhere" }}
+                        >
+                          unity entry expires {runtimeEntries[session.id].expires_at}:{" "}
+                          <code>{runtimeEntries[session.id].join_uri}</code>
+                        </p>
+                      ) : null}
+                    </>
                   ) : null}
                 </div>
               ))}

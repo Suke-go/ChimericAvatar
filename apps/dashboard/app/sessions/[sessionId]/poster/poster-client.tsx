@@ -48,13 +48,23 @@ export default function PosterClient({ sessionId }: { sessionId: string }) {
       if (posterData.poster_asset_id) {
         const cacheKey = `poster-image:${targetSessionId}:${posterData.poster_asset_id}`;
         const signedUrl = await cachedSignedUrl(cacheKey, () => fetchPosterImageUrl(targetSessionId));
-        setPosterImageUrl(signedUrl.url);
+        // The API now returns { url: null, missing: true } when the bucket
+        // has lost the object instead of throwing 502, so the upload form
+        // stays usable and the operator can simply re-upload.
+        setPosterImageUrl(signedUrl.url ?? null);
         setPosterMime(signedUrl.mime_type ?? null);
+        if (signedUrl.missing) {
+          setError(
+            "The previously uploaded poster image is no longer in storage. Re-upload to restore it.",
+          );
+        } else {
+          setError(null);
+        }
       } else {
         setPosterImageUrl(null);
         setPosterMime(null);
+        setError(null);
       }
-      setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load poster");
     }

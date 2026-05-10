@@ -157,10 +157,47 @@ class CurrentUserRead(BaseModel):
     role: str
 
 
+class RuntimeEntryRead(BaseModel):
+    session_code: str
+    join_token: str
+    join_uri: str
+    expires_at: str
+
+
+class RuntimeExchangeRequest(BaseModel):
+    sessionCode: str = Field(min_length=1, max_length=32)
+    joinToken: str = Field(min_length=1)
+    deviceId: str = Field(min_length=1, max_length=128)
+    deviceLabel: str | None = Field(default=None, max_length=128)
+
+
+class RuntimeRefreshRequest(BaseModel):
+    refreshToken: str = Field(min_length=1)
+
+
+class RuntimeCredentialsRead(BaseModel):
+    schemaVersion: str = "1.0"
+    sessionCode: str
+    runtimeToken: str
+    refreshToken: str
+    expiresAt: str
+    scope: str = "session-runtime"
+
+
 class AssetDownloadUrlRead(BaseModel):
-    url: str
+    """Signed URL response for a single asset.
+
+    ``url`` is null when the underlying storage object has gone missing —
+    the dashboard treats that as 'show re-upload UI', not as an error. See
+    `apps/api/app/storage.py` `try_sign_asset` and the docs for the
+    Tier 1/2/3 tolerance contract.
+    """
+
+    url: str | None
     expires_at: int
     mime_type: str | None = None
+    missing: bool = False
+    missing_reason: str | None = None
 
 
 class KnowledgeTextCreate(BaseModel):
@@ -330,6 +367,21 @@ class VoiceConsentRead(BaseModel):
     confirmed_by_user_id: str
     consent_label: str
     notes: str | None
+
+
+class VoiceCloneResult(BaseModel):
+    """Outcome of POST /sessions/{id}/voice/clone.
+
+    The dashboard uses ``avatar_voice_id_set`` to decide whether to refresh
+    the avatar config view after the clone completes, and ``voice_id`` to
+    drive a sample-preview call so the operator hears the clone immediately
+    without re-typing the new ID.
+    """
+
+    voice_id: str
+    consent: VoiceConsentRead
+    avatar_voice_id_set: bool
+    sample_count: int
 
 
 class RetrievalPreviewRequest(BaseModel):

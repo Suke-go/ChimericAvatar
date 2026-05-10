@@ -19,6 +19,7 @@ import {
   PosterPanel,
   PosterTextBlock,
   PreviewCue,
+  RuntimeEntry,
   RuntimeManifest,
   ScriptLanguage,
   ScriptSegment,
@@ -179,14 +180,28 @@ export async function replacePreviewCues(
   });
 }
 
-export async function publishSession(sessionId: string): Promise<SessionItem> {
-  return apiFetch<SessionItem>(`/api/v1/sessions/${sessionId}/publish`, {
+export async function publishSession(
+  sessionId: string,
+  options: { force?: boolean } = {},
+): Promise<SessionItem> {
+  // The API refuses to publish a session whose manifest references storage
+  // objects that have gone missing (DB row exists, bucket file does not).
+  // Pass `force: true` only when the operator has explicitly acknowledged
+  // they're shipping a placeholder.
+  const qs = options.force ? "?force=true" : "";
+  return apiFetch<SessionItem>(`/api/v1/sessions/${sessionId}/publish${qs}`, {
     method: "POST",
   });
 }
 
 export async function fetchSessionManifest(sessionId: string): Promise<RuntimeManifest> {
   return apiFetch<RuntimeManifest>(`/api/v1/sessions/${sessionId}/manifest`);
+}
+
+export async function createRuntimeEntry(sessionId: string): Promise<RuntimeEntry> {
+  return apiFetch<RuntimeEntry>(`/api/v1/sessions/${sessionId}/runtime-entry`, {
+    method: "POST",
+  });
 }
 
 export function getRuntimeManifestUrl(sessionCode: string): string {
@@ -420,6 +435,59 @@ export async function generateVoiceSample(payload: {
     method: "POST",
     body: JSON.stringify(payload),
   });
+}
+
+export type VoiceCloneResult = {
+  voice_id: string;
+  consent: VoiceConsent;
+  /** True when the API set this session's AvatarConfig.voice_id to the cloned voice. */
+  avatar_voice_id_set: boolean;
+  sample_count: number;
+};
+
+/**
+ * Forward recorded / uploaded audio samples to the API's voice-clone endpoint,
+ * which calls ElevenLabs IVC server-side. The server records consent and (by
+ * default) wires the new voice ID into this session's AvatarConfig.
+ */
+export async function cloneVoiceForSession(
+  sessionId: string,
+  payload: {
+    name: string;
+    consent_label: string;
+    description?: string;
+    set_as_session_voice?: boolean;
+    remove_background_noise?: boolean;
+    files: File[] | Blob[];
+  },
+): Promise<VoiceCloneResult> {
+  const auth = await authHeaders();
+  const headers = new Headers();
+  for (const [k, v] of Object.entries(auth)) {
+    if (v) headers.set(k, v);
+  }
+  // Don't set Content-Type — the browser must add the multipart boundary.
+  const form = new FormData();
+  form.append("name", payload.name);
+  form.append("consent_label", payload.consent_label);
+  if (payload.description) form.append("description", payload.description);
+  form.append("set_as_session_voice", String(payload.set_as_session_voice ?? true));
+  form.append("remove_background_noise", String(payload.remove_background_noise ?? false));
+  payload.files.forEach((file, index) => {
+    // ElevenLabs accepts repeated `files` fields. The server side reads
+    // them as `list[UploadFile]`. Provide a stable filename so each take
+    // shows up distinctly in ElevenLabs' voice editor.
+    const filename = (file as File).name ?? `clone-take-${index + 1}.webm`;
+    form.append("files", file, filename);
+  });
+  const response = await fetch(
+    `${API_BASE_URL}/api/v1/sessions/${sessionId}/voice/clone`,
+    { method: "POST", headers, body: form },
+  );
+  if (!response.ok) {
+    throw new Error((await response.text()) || `Voice clone failed: ${response.status}`);
+  }
+  return (await response.json()) as VoiceCloneResult;
 }
 
 export async function uploadGvrmArchive(

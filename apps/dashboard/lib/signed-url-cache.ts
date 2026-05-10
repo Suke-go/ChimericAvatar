@@ -40,16 +40,24 @@ function write(key: string, entry: Entry): void {
   }
 }
 
-export async function cachedSignedUrl<T extends { url: string; expires_at: number; mime_type?: string | null }>(
-  key: string,
-  fetcher: () => Promise<T>,
-): Promise<T> {
+export async function cachedSignedUrl<
+  T extends {
+    url: string | null;
+    expires_at: number;
+    mime_type?: string | null;
+    missing?: boolean;
+  },
+>(key: string, fetcher: () => Promise<T>): Promise<T> {
   const cached = read(key);
   if (cached) {
     return { url: cached.url, expires_at: cached.expires_at, mime_type: cached.mime ?? null } as T;
   }
   const fresh = await fetcher();
-  write(key, { url: fresh.url, mime: fresh.mime_type ?? null, expires_at: fresh.expires_at });
+  // Don't cache a missing-asset answer. Re-uploads recreate the storage
+  // object and should be visible immediately, not 30 minutes later.
+  if (fresh.url && !fresh.missing) {
+    write(key, { url: fresh.url, mime: fresh.mime_type ?? null, expires_at: fresh.expires_at });
+  }
   return fresh;
 }
 
