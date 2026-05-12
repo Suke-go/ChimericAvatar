@@ -19,7 +19,7 @@ Shader "Chimera/SplatPack Gaussian Splat"
         Pass
         {
             Name "ForwardUnlit"
-            Blend SrcAlpha OneMinusSrcAlpha
+            Blend One OneMinusSrcAlpha
             ZWrite Off
             ZTest LEqual
             Cull Off
@@ -145,7 +145,7 @@ Shader "Chimera/SplatPack Gaussian Splat"
                 float edgeScale = max(0.25, tailExtent * 0.5);
                 alpha *= saturate(edgeDistance / edgeScale * lerp(1.0, 0.625, smallRadiusFade));
                 clip(alpha - _AlphaClip);
-                return float4(input.color.rgb, alpha);
+                return float4(input.color.rgb * alpha, alpha);
             }
             ENDHLSL
         }
