@@ -59,8 +59,8 @@ namespace SplatPack.Editor
             string[] guids = AssetDatabase.FindAssets("SplatPackGeneratedMaterial t:Material");
             foreach (string guid in guids)
             {
-                string path = AssetDatabase.GUIDToAssetPath(guid);
-                Material existing = AssetDatabase.LoadAssetAtPath<Material>(path);
+                string materialPath = AssetDatabase.GUIDToAssetPath(guid);
+                Material existing = AssetDatabase.LoadAssetAtPath<Material>(materialPath);
                 if (existing != null && existing.shader != null && existing.shader.name == "Chimera/SplatPack Gaussian Splat")
                 {
                     return existing;
