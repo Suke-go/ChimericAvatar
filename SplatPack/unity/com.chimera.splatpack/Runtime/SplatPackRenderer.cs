@@ -45,6 +45,7 @@ namespace SplatPack.Runtime
         [SerializeField] private float alphaClip = 0.002f;
         [SerializeField] private float minScreenRadiusPixels = 0.75f;
         [SerializeField] private float maxScreenRadiusPixels = 48f;
+        [SerializeField] private float maxScreenEccentricity = 8f;
         [SerializeField] private float kernel2DSize = 0.05f;
         [SerializeField] private float eigenTermFloor = 1e-8f;
         [SerializeField] private bool enforceStandaloneRadiusCap = true;
@@ -106,6 +107,7 @@ namespace SplatPack.Runtime
         private float lastProjectionSplatScale;
         private float lastProjectionMinRadius;
         private float lastProjectionMaxRadius;
+        private float lastProjectionMaxEccentricity;
         private float lastProjectionKernel2DSize;
         private bool hasSortCameraState;
         private Vector3 lastSortCameraPosition;
@@ -670,6 +672,7 @@ namespace SplatPack.Runtime
             projectionCompute.SetFloat("_OpacityPower", ResolveOpacityPower());
             projectionCompute.SetFloat("_MinScreenRadiusPixels", Mathf.Max(0f, minScreenRadiusPixels));
             projectionCompute.SetFloat("_MaxScreenRadiusPixels", ResolveMaxScreenRadiusPixels());
+            projectionCompute.SetFloat("_MaxScreenEccentricity", ResolveMaxScreenEccentricity());
             projectionCompute.SetFloat("_Kernel2DSize", Mathf.Max(0f, kernel2DSize));
             projectionCompute.SetFloat("_EigenTermFloor", Mathf.Max(0f, eigenTermFloor));
             projectionCompute.SetMatrix("_SplatLocalToWorld", transform.localToWorldMatrix);
@@ -741,6 +744,12 @@ namespace SplatPack.Runtime
         {
             float value = Mathf.Max(minScreenRadiusPixels, maxScreenRadiusPixels);
             return enforceStandaloneRadiusCap ? Mathf.Min(value, StandaloneSafeMaxRadiusPixels) : value;
+        }
+
+        private float ResolveMaxScreenEccentricity()
+        {
+            float value = Mathf.Max(1f, maxScreenEccentricity);
+            return enforceStandaloneRadiusCap ? Mathf.Min(value, 12f) : value;
         }
 
         private int ResolveSortIntervalFrames(Camera camera)
@@ -880,7 +889,7 @@ namespace SplatPack.Runtime
                 + $"rendererPosition={transform.position}, "
                 + $"projection={lastProjectionPath}/{lastProjectionDispatchCpuMs:0.###}ms-cpu/{Mathf.Max(1, lastProjectionEyeCount)}eye, "
                 + $"sort={BuildSortDiagnostics()}, "
-                + $"quality=opacity/{ResolveOpacityScale():0.###},opPow/{ResolveOpacityPower():0.###},scale/{ResolveSplatScale():0.###},maxR/{ResolveMaxScreenRadiusPixels():0.###},clip/{ResolveAlphaClip():0.####}, "
+                + $"quality=opacity/{ResolveOpacityScale():0.###},opPow/{ResolveOpacityPower():0.###},scale/{ResolveSplatScale():0.###},maxR/{ResolveMaxScreenRadiusPixels():0.###},ecc/{ResolveMaxScreenEccentricity():0.###},clip/{ResolveAlphaClip():0.####}, "
                 + BuildProjectionDiagnostics(camera)
                 + $"splats={package.SplatCount}, chunks={package.ChunkCount}, "
                 + $"vertices={package.SplatCount * 6 * ResolveProceduralDrawInstanceCount(camera)}.");
@@ -1015,6 +1024,7 @@ namespace SplatPack.Runtime
                    && Mathf.Approximately(lastProjectionSplatScale, ResolveSplatScale())
                    && Mathf.Approximately(lastProjectionMinRadius, Mathf.Max(0f, minScreenRadiusPixels))
                    && Mathf.Approximately(lastProjectionMaxRadius, ResolveMaxScreenRadiusPixels())
+                   && Mathf.Approximately(lastProjectionMaxEccentricity, ResolveMaxScreenEccentricity())
                    && Mathf.Approximately(lastProjectionKernel2DSize, Mathf.Max(0f, kernel2DSize));
         }
 
@@ -1037,6 +1047,7 @@ namespace SplatPack.Runtime
             lastProjectionSplatScale = ResolveSplatScale();
             lastProjectionMinRadius = Mathf.Max(0f, minScreenRadiusPixels);
             lastProjectionMaxRadius = ResolveMaxScreenRadiusPixels();
+            lastProjectionMaxEccentricity = ResolveMaxScreenEccentricity();
             lastProjectionKernel2DSize = Mathf.Max(0f, kernel2DSize);
         }
 

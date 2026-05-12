@@ -36,6 +36,7 @@ float _OpacityScale;
 float _OpacityPower;
 float _MinScreenRadiusPixels;
 float _MaxScreenRadiusPixels;
+float _MaxScreenEccentricity;
 float _Kernel2DSize;
 float _EigenTermFloor;
 
@@ -134,6 +135,15 @@ void ProjectSplats(uint3 id : SV_DispatchThreadID)
     float maxRadiusPixels = max(_MinScreenRadiusPixels, _MaxScreenRadiusPixels);
     float radius0Pixels = clamp(_SplatScale * kGaussianExtent * sqrt(lambda0), _MinScreenRadiusPixels, maxRadiusPixels);
     float radius1Pixels = clamp(_SplatScale * kGaussianExtent * sqrt(lambda1), _MinScreenRadiusPixels, maxRadiusPixels);
+    float originalArea = max(1e-4, radius0Pixels * radius1Pixels);
+    float maxEccentricity = max(1.0, _MaxScreenEccentricity);
+    if (radius0Pixels > radius1Pixels * maxEccentricity)
+    {
+        radius1Pixels = min(maxRadiusPixels, max(radius1Pixels, radius0Pixels / maxEccentricity));
+        radius0Pixels = min(radius0Pixels, radius1Pixels * maxEccentricity);
+    }
+
+    float areaScale = saturate(originalArea / max(1e-4, radius0Pixels * radius1Pixels));
     float2 axis0Ndc = 2.0 * dir0 * radius0Pixels / max(float2(1.0, 1.0), _ViewportSize.xy);
     float2 axis1Ndc = 2.0 * dir1 * radius1Pixels / max(float2(1.0, 1.0), _ViewportSize.xy);
 
@@ -141,7 +151,7 @@ void ProjectSplats(uint3 id : SV_DispatchThreadID)
     projected.clipCenter = clipCenter;
     projected.axis0Ndc = float4(axis0Ndc, 0.0, 0.0);
     projected.axis1Ndc = float4(axis1Ndc, 0.0, 0.0);
-    float alpha = pow(saturate(splat.color.a), max(0.01, _OpacityPower));
+    float alpha = pow(saturate(splat.color.a), max(0.01, _OpacityPower)) * areaScale;
     projected.color = float4(saturate(splat.color.rgb), alpha);
     projected.meta = float4(clipCenter.z / clipCenter.w, max(radius0Pixels, radius1Pixels), 1.0, 0.0);
     _ProjectedSplats[projectedIndex] = projected;
