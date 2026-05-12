@@ -166,6 +166,7 @@ namespace Chimera.Runtime
         private bool warnedMissingMaterial;
         private bool loggedFirstDraw;
         private int lastDrawFrame = -1;
+        private bool lastDrawWasStereoOrXr;
         private string lastDrawCameraName = "none";
         private string lastDrawPath = "none";
         private string lastDrawSkipReason = "not-rendered-yet";
@@ -2017,6 +2018,12 @@ namespace Chimera.Runtime
                 return false;
             }
 
+            if (IsDuplicateMonoGameCameraAfterStereoDraw(camera))
+            {
+                skipReason = $"xr-skip-duplicate-mono-game:{camera.name}";
+                return false;
+            }
+
             if (IsXrRenderingActive())
             {
                 if (camera.cameraType != CameraType.Game)
@@ -2055,6 +2062,20 @@ namespace Chimera.Runtime
 
             skipReason = $"not-view-camera:{camera.name}";
             return false;
+        }
+
+        private bool IsDuplicateMonoGameCameraAfterStereoDraw(Camera camera)
+        {
+            if (camera == null
+                || camera.cameraType != CameraType.Game
+                || camera.stereoEnabled
+                || !lastDrawWasStereoOrXr
+                || lastDrawFrame != Time.frameCount)
+            {
+                return false;
+            }
+
+            return string.Equals(lastDrawCameraName, camera.name, StringComparison.Ordinal);
         }
 
         private void DrawSplats(ScriptableRenderContext context, Camera camera)
@@ -2146,13 +2167,15 @@ namespace Chimera.Runtime
 
         private void RememberDraw(Camera camera, bool useIndirectVisibleDraw, string phase)
         {
+            var isStereoOrXrDraw = IsXrRenderingActive() || (camera != null && camera.stereoEnabled);
             lastDrawFrame = Time.frameCount;
+            lastDrawWasStereoOrXr = isStereoOrXrDraw;
             lastDrawCameraName = camera != null ? camera.name : "unknown-camera";
-            lastDrawPath = $"{phase}-{(useIndirectVisibleDraw ? "indirect" : IsXrRenderingActive() ? "full-xr-safe" : "full")}";
+            lastDrawPath = $"{phase}-{(useIndirectVisibleDraw ? "indirect" : isStereoOrXrDraw ? "full-xr-safe" : "full")}";
             lastDrawSkipReason = "none";
 
             var stereoEye = camera != null ? camera.stereoActiveEye.ToString() : "None";
-            var signature = $"{lastDrawPath}|{lastDrawCameraName}|{camera?.cameraType}|xr:{IsXrRenderingActive()}|eye:{stereoEye}";
+            var signature = $"{lastDrawPath}|{lastDrawCameraName}|{camera?.cameraType}|xr:{isStereoOrXrDraw}|eye:{stereoEye}";
             if (!loggedFirstDraw
                 || signature != lastLoggedDrawSignature
                 || (logPeriodicDrawDiagnostics && Time.unscaledTime >= nextDrawDiagnosticLogTime))
@@ -2165,7 +2188,7 @@ namespace Chimera.Runtime
                     + $"path={lastDrawPath}, camera={lastDrawCameraName}, "
                     + $"cameraType={camera?.cameraType}, stereo={camera != null && camera.stereoEnabled}, "
                     + $"stereoEye={stereoEye}, "
-                    + $"xrActive={IsXrRenderingActive()}, platform={Application.platform}, "
+                    + $"xrActive={IsXrRenderingActive()}, stereoOrXrDraw={isStereoOrXrDraw}, platform={Application.platform}, "
                     + $"graphics={SystemInfo.graphicsDeviceType}, runtimePath={runtimePath}, "
                     + $"projection={ProjectionDiagnostics}, "
                     + $"splats={RenderedSplatCount}, vertices={RenderedSplatCount * 6}.");
