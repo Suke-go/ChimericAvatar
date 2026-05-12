@@ -34,6 +34,10 @@ namespace SplatPack.Runtime
         [SerializeField] private float kernel2DSize = 0.3f;
         [SerializeField] private float eigenTermFloor = 0.1f;
 
+        [Header("Sorting")]
+        [SerializeField] private bool enableChunkDepthSort = true;
+        [SerializeField] private int chunkSortIntervalFrames = 1;
+
         [Header("Diagnostics")]
         [SerializeField] private bool logDiagnostics = true;
         [SerializeField] private float diagnosticIntervalSeconds = 5f;
@@ -49,8 +53,18 @@ namespace SplatPack.Runtime
         private float nextDiagnosticLogTime;
         private float lastProjectionDispatchCpuMs;
         private int lastProjectionEyeCount;
+        private uint[] drawOrderCpu;
+        private ChunkSortItem[] chunkSortItems;
+        private int lastDrawOrderSortFrame = -1;
+        private float lastDrawOrderSortCpuMs;
         private bool didRecenter;
         private bool warnedUnsupportedMaterial;
+
+        private struct ChunkSortItem
+        {
+            public int ChunkIndex;
+            public float ViewDepth;
+        }
 
         public void Configure(
             SplatPackAsset packageAsset,
@@ -106,14 +120,17 @@ namespace SplatPack.Runtime
             splatBuffer = new ComputeBuffer(package.SplatCount, SplatPackFormat.SplatStride, ComputeBufferType.Structured);
             splatBuffer.SetData(package.Splats);
 
-            var drawOrder = new uint[package.SplatCount];
-            for (uint i = 0; i < drawOrder.Length; i++)
+            drawOrderCpu = new uint[package.SplatCount];
+            for (uint i = 0; i < drawOrderCpu.Length; i++)
             {
-                drawOrder[i] = i;
+                drawOrderCpu[i] = i;
             }
 
             drawOrderBuffer = new ComputeBuffer(package.SplatCount, sizeof(uint), ComputeBufferType.Structured);
-            drawOrderBuffer.SetData(drawOrder);
+            drawOrderBuffer.SetData(drawOrderCpu);
+            chunkSortItems = new ChunkSortItem[package.ChunkCount];
+            lastDrawOrderSortFrame = -1;
+            lastDrawOrderSortCpuMs = 0f;
 
             projectedBuffer = new ComputeBuffer(package.SplatCount * MaxProjectedEyes, SplatPackFormat.ProjectedSplatStride, ComputeBufferType.Structured);
             propertyBlock ??= new MaterialPropertyBlock();
@@ -255,6 +272,7 @@ namespace SplatPack.Runtime
             }
 
             RecenterIfNeeded(camera);
+            UpdateDrawOrder(camera);
             int eyeCount = DispatchProjectedSplats(camera);
             propertyBlock.Clear();
             propertyBlock.SetBuffer("_Splats", splatBuffer);
@@ -280,6 +298,68 @@ namespace SplatPack.Runtime
             material.SetFloat("_UseProjectedSplatCache", 1f);
             material.SetInt("_ProjectedSplatCacheEyeStride", package.SplatCount);
             material.SetInt("_ProjectedSplatCacheEyeCount", eyeCount);
+        }
+
+        private void UpdateDrawOrder(Camera camera)
+        {
+            if (!enableChunkDepthSort
+                || camera == null
+                || package == null
+                || drawOrderCpu == null
+                || drawOrderBuffer == null
+                || chunkSortItems == null
+                || package.ChunkCount <= 0)
+            {
+                return;
+            }
+
+            int frame = Time.frameCount;
+            int interval = Mathf.Max(1, chunkSortIntervalFrames);
+            if (lastDrawOrderSortFrame >= 0 && frame - lastDrawOrderSortFrame < interval)
+            {
+                return;
+            }
+
+            Diagnostics.Stopwatch stopwatch = Diagnostics.Stopwatch.StartNew();
+            Matrix4x4 worldToView = camera.worldToCameraMatrix;
+            for (int i = 0; i < package.Chunks.Length; i++)
+            {
+                SplatPackChunk chunk = package.Chunks[i];
+                Vector3 localCenter = (chunk.BoundsMin + chunk.BoundsMax) * 0.5f;
+                Vector3 worldCenter = transform.TransformPoint(localCenter);
+                float viewDepth = worldToView.MultiplyPoint3x4(worldCenter).z;
+                chunkSortItems[i] = new ChunkSortItem
+                {
+                    ChunkIndex = i,
+                    ViewDepth = viewDepth,
+                };
+            }
+
+            Array.Sort(chunkSortItems, (a, b) => a.ViewDepth.CompareTo(b.ViewDepth));
+
+            int cursor = 0;
+            for (int sortedIndex = 0; sortedIndex < chunkSortItems.Length; sortedIndex++)
+            {
+                SplatPackChunk chunk = package.Chunks[chunkSortItems[sortedIndex].ChunkIndex];
+                int end = Mathf.Min(package.SplatCount, chunk.SplatOffset + chunk.SplatCount);
+                for (int splatIndex = chunk.SplatOffset; splatIndex < end; splatIndex++)
+                {
+                    drawOrderCpu[cursor++] = (uint)splatIndex;
+                }
+            }
+
+            if (cursor < drawOrderCpu.Length)
+            {
+                for (int splatIndex = cursor; splatIndex < drawOrderCpu.Length; splatIndex++)
+                {
+                    drawOrderCpu[splatIndex] = (uint)splatIndex;
+                }
+            }
+
+            drawOrderBuffer.SetData(drawOrderCpu);
+            stopwatch.Stop();
+            lastDrawOrderSortFrame = frame;
+            lastDrawOrderSortCpuMs = (float)stopwatch.Elapsed.TotalMilliseconds;
         }
 
         private int DispatchProjectedSplats(Camera camera)
@@ -461,6 +541,7 @@ namespace SplatPack.Runtime
                 + $"eye={XRSettings.eyeTextureWidth}x{XRSettings.eyeTextureHeight}, "
                 + $"rendererPosition={transform.position}, "
                 + $"projection={lastProjectionDispatchCpuMs:0.###}ms-cpu/{Mathf.Max(1, lastProjectionEyeCount)}eye, "
+                + $"sort={(enableChunkDepthSort ? $"chunk-depth/{package.ChunkCount}/{lastDrawOrderSortCpuMs:0.###}ms-cpu" : "off")}, "
                 + BuildProjectionDiagnostics(camera)
                 + $"splats={package.SplatCount}, chunks={package.ChunkCount}, "
                 + $"vertices={package.SplatCount * 6 * ResolveProceduralDrawInstanceCount(camera)}.");
@@ -533,6 +614,8 @@ namespace SplatPack.Runtime
             splatBuffer = null;
             drawOrderBuffer = null;
             projectedBuffer = null;
+            drawOrderCpu = null;
+            chunkSortItems = null;
         }
     }
 }
