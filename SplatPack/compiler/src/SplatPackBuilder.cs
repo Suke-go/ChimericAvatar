@@ -5,6 +5,9 @@ namespace SplatPack.Compiler;
 public static class SplatPackBuilder
 {
     private const float ShC0 = 0.28209479177387814f;
+    private const float MinimumScale = 1e-8f;
+
+    private readonly record struct Candidate(int SourceIndex, float Opacity, float MaxAxisLength);
 
     public static SplatPackPackage Build(GaussianSplatStream stream, int targetChunkSize)
     {
@@ -13,22 +16,56 @@ public static class SplatPackBuilder
 
     public static SplatPackPackage Build(GaussianSplatStream stream, SplatPackBuildOptions options)
     {
+        return BuildWithReport(stream, options).Package;
+    }
+
+    public static SplatPackBuildResult BuildWithReport(GaussianSplatStream stream, SplatPackBuildOptions options)
+    {
         if (stream.Count <= 0)
         {
-            return new SplatPackPackage
+            var emptyPackage = new SplatPackPackage
             {
                 Bounds = new SplatPackBounds(Vector3.Zero, Vector3.Zero),
                 Chunks = Array.Empty<SplatPackChunk>(),
                 Splats = Array.Empty<SplatPackSplat>(),
             };
+            return new SplatPackBuildResult
+            {
+                Package = emptyPackage,
+                Report = BuildReport(emptyPackage, options, SplatPackRotationOrder.WXYZ, 0f, 0, 0, 0, Array.Empty<float>(), Array.Empty<float>(), Array.Empty<float>(), Array.Empty<float>()),
+            };
         }
 
         int targetChunkSize = Math.Max(1, options.ChunkSize);
         SplatPackRotationOrder rotationOrder = ResolveRotationOrder(stream, options.RotationOrder);
-        SplatPackBounds bounds = ComputeBounds(stream);
-        int gridResolution = Math.Max(1, (int)Math.Ceiling(Math.Pow(stream.Count / (double)targetChunkSize, 1.0 / 3.0)));
+        Candidate[] candidates = SelectCandidates(
+            stream,
+            options,
+            out int prunedInvalid,
+            out int prunedLowOpacity,
+            out float[] rawOpacities,
+            out float[] rawMaxAxisLengths);
 
-        var order = new int[stream.Count];
+        if (candidates.Length <= 0)
+        {
+            var emptyPackage = new SplatPackPackage
+            {
+                Bounds = new SplatPackBounds(Vector3.Zero, Vector3.Zero),
+                Chunks = Array.Empty<SplatPackChunk>(),
+                Splats = Array.Empty<SplatPackSplat>(),
+            };
+            return new SplatPackBuildResult
+            {
+                Package = emptyPackage,
+                Report = BuildReport(emptyPackage, options, rotationOrder, 0f, prunedInvalid, prunedLowOpacity, 0, rawOpacities, rawMaxAxisLengths, Array.Empty<float>(), Array.Empty<float>()),
+            };
+        }
+
+        float axisLengthCap = ResolveAxisLengthCap(candidates, options);
+        SplatPackBounds bounds = ComputeBounds(stream, candidates);
+        int gridResolution = Math.Max(1, (int)Math.Ceiling(Math.Pow(candidates.Length / (double)targetChunkSize, 1.0 / 3.0)));
+
+        var order = new int[candidates.Length];
         for (int i = 0; i < order.Length; i++)
         {
             order[i] = i;
@@ -36,47 +73,174 @@ public static class SplatPackBuilder
 
         Array.Sort(order, (a, b) =>
         {
-            long ka = GridKey(stream, bounds, gridResolution, a);
-            long kb = GridKey(stream, bounds, gridResolution, b);
+            long ka = GridKey(stream, bounds, gridResolution, candidates[a].SourceIndex);
+            long kb = GridKey(stream, bounds, gridResolution, candidates[b].SourceIndex);
             int byKey = ka.CompareTo(kb);
             return byKey != 0 ? byKey : a.CompareTo(b);
         });
 
-        var splats = new SplatPackSplat[stream.Count];
+        var splats = new SplatPackSplat[candidates.Length];
         var chunks = new List<SplatPackChunk>();
+        var emittedOpacities = new float[candidates.Length];
+        var emittedMaxAxisLengths = new float[candidates.Length];
+        int axisClampedSplats = 0;
 
         int cursor = 0;
         while (cursor < order.Length)
         {
-            long key = GridKey(stream, bounds, gridResolution, order[cursor]);
+            long key = GridKey(stream, bounds, gridResolution, candidates[order[cursor]].SourceIndex);
             int start = cursor;
             while (cursor < order.Length
-                   && GridKey(stream, bounds, gridResolution, order[cursor]) == key
+                   && GridKey(stream, bounds, gridResolution, candidates[order[cursor]].SourceIndex) == key
                    && cursor - start < targetChunkSize)
             {
-                splats[cursor] = ConvertSplat(stream, order[cursor], rotationOrder);
+                Candidate candidate = candidates[order[cursor]];
+                splats[cursor] = ConvertSplat(stream, candidate.SourceIndex, rotationOrder, axisLengthCap, out bool axisClamped, out float emittedMaxAxisLength);
+                emittedOpacities[cursor] = splats[cursor].Color.W;
+                emittedMaxAxisLengths[cursor] = emittedMaxAxisLength;
+                if (axisClamped)
+                {
+                    axisClampedSplats++;
+                }
+
                 cursor++;
             }
 
             chunks.Add(BuildChunk(splats, start, cursor - start));
         }
 
-        return new SplatPackPackage
+        var package = new SplatPackPackage
         {
             Bounds = bounds,
             Chunks = chunks.ToArray(),
             Splats = splats,
         };
+        return new SplatPackBuildResult
+        {
+            Package = package,
+            Report = BuildReport(
+                package,
+                options,
+                rotationOrder,
+                axisLengthCap,
+                prunedInvalid,
+                prunedLowOpacity,
+                axisClampedSplats,
+                rawOpacities,
+                rawMaxAxisLengths,
+                emittedOpacities,
+                emittedMaxAxisLengths),
+        };
     }
 
-    private static SplatPackBounds ComputeBounds(GaussianSplatStream stream)
+    private static Candidate[] SelectCandidates(
+        GaussianSplatStream stream,
+        SplatPackBuildOptions options,
+        out int prunedInvalid,
+        out int prunedLowOpacity,
+        out float[] rawOpacities,
+        out float[] rawMaxAxisLengths)
+    {
+        float opacityPruneThreshold = MathF.Max(0f, options.OpacityPruneThreshold);
+        var candidates = new List<Candidate>(stream.Count);
+        var opacityStats = new List<float>(stream.Count);
+        var axisStats = new List<float>(stream.Count);
+        prunedInvalid = 0;
+        prunedLowOpacity = 0;
+
+        for (int i = 0; i < stream.Count; i++)
+        {
+            if (!TryInspectRawSplat(stream, i, out float opacity, out float maxAxisLength))
+            {
+                prunedInvalid++;
+                continue;
+            }
+
+            opacityStats.Add(opacity);
+            axisStats.Add(maxAxisLength);
+            if (opacity < opacityPruneThreshold)
+            {
+                prunedLowOpacity++;
+                continue;
+            }
+
+            candidates.Add(new Candidate(i, opacity, maxAxisLength));
+        }
+
+        rawOpacities = opacityStats.ToArray();
+        rawMaxAxisLengths = axisStats.ToArray();
+        return candidates.ToArray();
+    }
+
+    private static bool TryInspectRawSplat(GaussianSplatStream stream, int index, out float opacity, out float maxAxisLength)
+    {
+        opacity = 0f;
+        maxAxisLength = 0f;
+        Vector3 position = Position(stream, index);
+        if (!IsFinite(position))
+        {
+            return false;
+        }
+
+        float sx = SafeExp(stream.ScalesLog[index * 3 + 0]);
+        float sy = SafeExp(stream.ScalesLog[index * 3 + 1]);
+        float sz = SafeExp(stream.ScalesLog[index * 3 + 2]);
+        if (!IsFinite(sx) || !IsFinite(sy) || !IsFinite(sz) || sx <= 0f || sy <= 0f || sz <= 0f)
+        {
+            return false;
+        }
+
+        int rotationOffset = index * 4;
+        for (int i = 0; i < 4; i++)
+        {
+            if (!IsFinite(stream.RotationsRaw[rotationOffset + i]))
+            {
+                return false;
+            }
+        }
+
+        float rawOpacity = stream.OpacitiesRaw[index];
+        if (!IsFinite(rawOpacity))
+        {
+            return false;
+        }
+
+        opacity = Sigmoid(rawOpacity);
+        maxAxisLength = MathF.Max(sx, MathF.Max(sy, sz));
+        return IsFinite(opacity) && IsFinite(maxAxisLength);
+    }
+
+    private static float ResolveAxisLengthCap(Candidate[] candidates, SplatPackBuildOptions options)
+    {
+        if (options.MaxAxisLength > 0f)
+        {
+            return options.MaxAxisLength;
+        }
+
+        if (options.MaxAxisLengthPercentile <= 0f || candidates.Length == 0)
+        {
+            return 0f;
+        }
+
+        var values = new float[candidates.Length];
+        for (int i = 0; i < candidates.Length; i++)
+        {
+            values[i] = candidates[i].MaxAxisLength;
+        }
+
+        float percentile = Percentile(values, Math.Clamp(options.MaxAxisLengthPercentile, 0f, 100f));
+        float multiplier = MathF.Max(0.01f, options.MaxAxisLengthMultiplier);
+        return MathF.Max(MinimumScale, percentile * multiplier);
+    }
+
+    private static SplatPackBounds ComputeBounds(GaussianSplatStream stream, IReadOnlyList<Candidate> candidates)
     {
         var min = new Vector3(float.PositiveInfinity, float.PositiveInfinity, float.PositiveInfinity);
         var max = new Vector3(float.NegativeInfinity, float.NegativeInfinity, float.NegativeInfinity);
 
-        for (int i = 0; i < stream.Count; i++)
+        for (int i = 0; i < candidates.Count; i++)
         {
-            Vector3 p = Position(stream, i);
+            Vector3 p = Position(stream, candidates[i].SourceIndex);
             min = Vector3.Min(min, p);
             max = Vector3.Max(max, p);
         }
@@ -99,13 +263,27 @@ public static class SplatPackBuilder
         return new SplatPackChunk(min, max, offset, count, 0);
     }
 
-    private static SplatPackSplat ConvertSplat(GaussianSplatStream stream, int index, SplatPackRotationOrder rotationOrder)
+    private static SplatPackSplat ConvertSplat(
+        GaussianSplatStream stream,
+        int index,
+        SplatPackRotationOrder rotationOrder,
+        float axisLengthCap,
+        out bool axisClamped,
+        out float emittedMaxAxisLength)
     {
         Vector3 position = Position(stream, index);
         Vector3 scale = new(
-            MathF.Exp(stream.ScalesLog[index * 3 + 0]),
-            MathF.Exp(stream.ScalesLog[index * 3 + 1]),
-            MathF.Exp(stream.ScalesLog[index * 3 + 2]));
+            SafeExp(stream.ScalesLog[index * 3 + 0]),
+            SafeExp(stream.ScalesLog[index * 3 + 1]),
+            SafeExp(stream.ScalesLog[index * 3 + 2]));
+        Vector3 unclampedScale = scale;
+        if (axisLengthCap > 0f)
+        {
+            scale = Vector3.Min(scale, new Vector3(axisLengthCap));
+        }
+
+        axisClamped = scale != unclampedScale;
+        emittedMaxAxisLength = MathF.Max(scale.X, MathF.Max(scale.Y, scale.Z));
 
         Quaternion rotation = DecodeRotation(stream, index, rotationOrder);
 
@@ -212,5 +390,165 @@ public static class SplatPackBuilder
     private static float Sigmoid(float value)
     {
         return 1f / (1f + MathF.Exp(-value));
+    }
+
+    private static float SafeExp(float value)
+    {
+        if (!IsFinite(value))
+        {
+            return float.NaN;
+        }
+
+        return MathF.Exp(Math.Clamp(value, -40f, 40f));
+    }
+
+    private static bool IsFinite(Vector3 value)
+    {
+        return IsFinite(value.X) && IsFinite(value.Y) && IsFinite(value.Z);
+    }
+
+    private static bool IsFinite(float value)
+    {
+        return !float.IsNaN(value) && !float.IsInfinity(value);
+    }
+
+    private static SplatPackBuildReport BuildReport(
+        SplatPackPackage package,
+        SplatPackBuildOptions options,
+        SplatPackRotationOrder rotationOrder,
+        float axisLengthCap,
+        int prunedInvalid,
+        int prunedLowOpacity,
+        int axisClampedSplats,
+        float[] rawOpacities,
+        float[] rawMaxAxisLengths,
+        float[] emittedOpacities,
+        float[] emittedMaxAxisLengths)
+    {
+        Vector3 extents = package.Bounds.Max - package.Bounds.Min;
+        return new SplatPackBuildReport
+        {
+            TargetProfile = options.TargetProfile.ToString(),
+            RotationOrder = rotationOrder.ToString(),
+            Options = new SplatPackBuildReportOptions
+            {
+                ChunkSize = Math.Max(1, options.ChunkSize),
+                OpacityPruneThreshold = MathF.Max(0f, options.OpacityPruneThreshold),
+                AxisLengthCap = axisLengthCap,
+                MaxAxisLengthPercentile = options.MaxAxisLengthPercentile,
+                MaxAxisLengthMultiplier = options.MaxAxisLengthMultiplier,
+            },
+            Counts = new SplatPackBuildReportCounts
+            {
+                InputSplats = rawOpacities.Length + prunedInvalid,
+                EmittedSplats = package.Splats.Length,
+                PrunedInvalidSplats = prunedInvalid,
+                PrunedLowOpacitySplats = prunedLowOpacity,
+                AxisClampedSplats = axisClampedSplats,
+            },
+            Bounds = new SplatPackBuildReportBounds
+            {
+                Min = ToDto(package.Bounds.Min),
+                Max = ToDto(package.Bounds.Max),
+                Extents = ToDto(extents),
+            },
+            RawOpacity = BuildStats(rawOpacities),
+            RawMaxAxisLength = BuildStats(rawMaxAxisLengths),
+            EmittedOpacity = BuildStats(emittedOpacities),
+            EmittedMaxAxisLength = BuildStats(emittedMaxAxisLengths),
+            Chunks = BuildChunkStats(package.Chunks),
+            Memory = new SplatPackMemoryStats
+            {
+                SplatStrideBytes = SplatPackWriter.SplatStride,
+                ChunkStrideBytes = SplatPackWriter.ChunkStride,
+                SplatBytes = (long)package.Splats.Length * SplatPackWriter.SplatStride,
+                ChunkBytes = (long)package.Chunks.Length * SplatPackWriter.ChunkStride,
+                TotalUncompressedBytes = (long)package.Splats.Length * SplatPackWriter.SplatStride + (long)package.Chunks.Length * SplatPackWriter.ChunkStride,
+                RuntimeVertices = package.Splats.Length * 6,
+            },
+        };
+    }
+
+    private static SplatPackVector3Dto ToDto(Vector3 value)
+    {
+        return new SplatPackVector3Dto { X = value.X, Y = value.Y, Z = value.Z };
+    }
+
+    private static SplatPackChunkStats BuildChunkStats(SplatPackChunk[] chunks)
+    {
+        if (chunks.Length == 0)
+        {
+            return new SplatPackChunkStats { Count = 0, MinSplats = 0, MaxSplats = 0, MeanSplats = 0f };
+        }
+
+        int min = int.MaxValue;
+        int max = 0;
+        long sum = 0;
+        foreach (SplatPackChunk chunk in chunks)
+        {
+            min = Math.Min(min, chunk.SplatCount);
+            max = Math.Max(max, chunk.SplatCount);
+            sum += chunk.SplatCount;
+        }
+
+        return new SplatPackChunkStats
+        {
+            Count = chunks.Length,
+            MinSplats = min,
+            MaxSplats = max,
+            MeanSplats = sum / (float)chunks.Length,
+        };
+    }
+
+    private static SplatPackScalarStats BuildStats(float[] values)
+    {
+        if (values.Length == 0)
+        {
+            return new SplatPackScalarStats { Count = 0, Min = 0f, P50 = 0f, P90 = 0f, P95 = 0f, P99 = 0f, Max = 0f, Mean = 0f };
+        }
+
+        var sorted = (float[])values.Clone();
+        Array.Sort(sorted);
+        double sum = 0.0;
+        foreach (float value in sorted)
+        {
+            sum += value;
+        }
+
+        return new SplatPackScalarStats
+        {
+            Count = sorted.Length,
+            Min = sorted[0],
+            P50 = PercentileSorted(sorted, 50f),
+            P90 = PercentileSorted(sorted, 90f),
+            P95 = PercentileSorted(sorted, 95f),
+            P99 = PercentileSorted(sorted, 99f),
+            Max = sorted[^1],
+            Mean = (float)(sum / sorted.Length),
+        };
+    }
+
+    private static float Percentile(float[] values, float percentile)
+    {
+        if (values.Length == 0)
+        {
+            return 0f;
+        }
+
+        var sorted = (float[])values.Clone();
+        Array.Sort(sorted);
+        return PercentileSorted(sorted, percentile);
+    }
+
+    private static float PercentileSorted(float[] sorted, float percentile)
+    {
+        if (sorted.Length == 0)
+        {
+            return 0f;
+        }
+
+        float clamped = Math.Clamp(percentile, 0f, 100f);
+        int index = Math.Clamp((int)MathF.Round((sorted.Length - 1) * clamped / 100f), 0, sorted.Length - 1);
+        return sorted[index];
     }
 }

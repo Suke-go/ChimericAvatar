@@ -27,14 +27,31 @@ Use a standard binary little-endian 3DGS `.ply`.
 dotnet run --project SplatPack/compiler/SplatPack.Compiler.csproj -- `
   C:\path\to\input.ply `
   C:\path\to\output.splatpack `
+  --target standalone-xr `
   --chunk-size 4096
 ```
 
 Expected output:
 
 ```text
-SplatPack compiled: splats=..., chunks=..., rotation=..., output=...
+SplatPack compiled: target=StandaloneXr, splats=.../..., chunks=..., rotation=..., prunedInvalid=..., prunedOpacity=..., axisClamped=..., axisCap=..., output=..., report=...
 ```
+
+The compiler writes `output.splatpack.report.json` by default. Check it before
+runtime tuning. Important fields:
+
+```text
+Counts.PrunedInvalidSplats
+Counts.PrunedLowOpacitySplats
+Counts.AxisClampedSplats
+RawMaxAxisLength
+EmittedMaxAxisLength
+Chunks.MinSplats / Chunks.MaxSplats
+Memory.TotalUncompressedBytes
+```
+
+Use `--target reference` to disable the standalone-XR pruning and axis cap when
+you need an unmodified baseline package.
 
 For the first pass, the compiler supports:
 
@@ -116,6 +133,8 @@ stereoEye=...
 xrEnabled=...
 xrActive=...
 projection=...ms-cpu/1eye or ...ms-cpu/2eye
+sort=gpu-depth-bucket/... or chunk-depth-fallback/...
+projectionReadback=off
 splats=...
 chunks=...
 vertices=splats*6
@@ -125,6 +144,7 @@ For XR, the first success target is:
 
 ```text
 projection=.../2eye
+sort=gpu-depth-bucket/...
 vertices=splats*6
 ```
 
