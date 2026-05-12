@@ -28,6 +28,7 @@ int _ProjectedSplatOffset;
 float4x4 _WorldToView;
 float4x4 _ProjectionMatrix;
 float4x4 _ViewProjection;
+float4x4 _SplatLocalToWorld;
 float3 _CameraWorldPosition;
 float4 _ViewportSize;
 float _SplatScale;
@@ -79,7 +80,7 @@ void ProjectSplats(uint3 id : SV_DispatchThreadID)
 
     uint projectedIndex = (uint)_ProjectedSplatOffset + index;
     SplatPackSplat splat = _Splats[index];
-    float3 centerWS = splat.centerWS.xyz;
+    float3 centerWS = mul(_SplatLocalToWorld, float4(splat.centerWS.xyz, 1.0)).xyz;
     float3 centerVS = mul(_WorldToView, float4(centerWS, 1.0)).xyz;
     float4 clipCenter = mul(_ViewProjection, float4(centerWS, 1.0));
     float clipLimit = abs(clipCenter.w) * 1.2;
@@ -91,9 +92,12 @@ void ProjectSplats(uint3 id : SV_DispatchThreadID)
     }
 
     float depth = max(1e-4, -centerVS.z);
-    float3 axis0VS = mul((float3x3)_WorldToView, splat.axis0WS.xyz);
-    float3 axis1VS = mul((float3x3)_WorldToView, splat.axis1WS.xyz);
-    float3 axis2VS = mul((float3x3)_WorldToView, splat.axis2WS.xyz);
+    float3 axis0WS = mul((float3x3)_SplatLocalToWorld, splat.axis0WS.xyz);
+    float3 axis1WS = mul((float3x3)_SplatLocalToWorld, splat.axis1WS.xyz);
+    float3 axis2WS = mul((float3x3)_SplatLocalToWorld, splat.axis2WS.xyz);
+    float3 axis0VS = mul((float3x3)_WorldToView, axis0WS);
+    float3 axis1VS = mul((float3x3)_WorldToView, axis1WS);
+    float3 axis2VS = mul((float3x3)_WorldToView, axis2WS);
 
     float covXX = dot(float3(axis0VS.x, axis1VS.x, axis2VS.x), float3(axis0VS.x, axis1VS.x, axis2VS.x));
     float covXY = dot(float3(axis0VS.x, axis1VS.x, axis2VS.x), float3(axis0VS.y, axis1VS.y, axis2VS.y));

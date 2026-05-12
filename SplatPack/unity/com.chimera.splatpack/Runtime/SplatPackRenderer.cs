@@ -21,6 +21,10 @@ namespace SplatPack.Runtime
         [SerializeField] private ComputeShader projectionCompute;
         [SerializeField] private Camera targetCamera;
 
+        [Header("Placement")]
+        [SerializeField] private bool recenterInFrontOfCameraOnFirstDraw;
+        [SerializeField] private float recenterDistanceMeters = 3f;
+
         [Header("Quality")]
         [SerializeField] private float opacityScale = 1f;
         [SerializeField] private float splatScale = 1f;
@@ -45,13 +49,21 @@ namespace SplatPack.Runtime
         private float nextDiagnosticLogTime;
         private float lastProjectionDispatchCpuMs;
         private int lastProjectionEyeCount;
+        private bool didRecenter;
 
-        public void Configure(SplatPackAsset packageAsset, ComputeShader projection, Material material, Camera camera = null)
+        public void Configure(
+            SplatPackAsset packageAsset,
+            ComputeShader projection,
+            Material material,
+            Camera camera = null,
+            bool recenterOnFirstDraw = false)
         {
             asset = packageAsset;
             projectionCompute = projection;
             splatMaterial = material;
             targetCamera = camera;
+            recenterInFrontOfCameraOnFirstDraw = recenterOnFirstDraw;
+            didRecenter = false;
         }
 
         private void OnEnable()
@@ -89,6 +101,7 @@ namespace SplatPack.Runtime
                 return;
             }
 
+            didRecenter = false;
             splatBuffer = new ComputeBuffer(package.SplatCount, SplatPackFormat.SplatStride, ComputeBufferType.Structured);
             splatBuffer.SetData(package.Splats);
 
@@ -188,7 +201,7 @@ namespace SplatPack.Runtime
                     0,
                     MeshTopology.Triangles,
                     package.SplatCount * 6,
-                    1,
+                    ResolveProceduralDrawInstanceCount(camera),
                     propertyBlock);
                 context.ExecuteCommandBuffer(command);
             }
@@ -211,10 +224,10 @@ namespace SplatPack.Runtime
 #pragma warning disable 0618
             Graphics.DrawProcedural(
                 material,
-                package.Bounds,
+                ResolveDrawBounds(),
                 MeshTopology.Triangles,
                 package.SplatCount * 6,
-                1,
+                ResolveProceduralDrawInstanceCount(camera),
                 null,
                 propertyBlock,
                 ShadowCastingMode.Off,
@@ -231,6 +244,7 @@ namespace SplatPack.Runtime
                 return false;
             }
 
+            RecenterIfNeeded(camera);
             int eyeCount = DispatchProjectedSplats(camera);
             propertyBlock.Clear();
             propertyBlock.SetBuffer("_Splats", splatBuffer);
@@ -262,6 +276,7 @@ namespace SplatPack.Runtime
             projectionCompute.SetFloat("_MaxScreenRadiusPixels", Mathf.Max(minScreenRadiusPixels, maxScreenRadiusPixels));
             projectionCompute.SetFloat("_Kernel2DSize", Mathf.Max(0f, kernel2DSize));
             projectionCompute.SetFloat("_EigenTermFloor", Mathf.Max(0f, eigenTermFloor));
+            projectionCompute.SetMatrix("_SplatLocalToWorld", transform.localToWorldMatrix);
 
             if (camera != null && camera.stereoEnabled)
             {
@@ -317,6 +332,71 @@ namespace SplatPack.Runtime
             return splatMaterial;
         }
 
+        private void RecenterIfNeeded(Camera camera)
+        {
+            if (!recenterInFrontOfCameraOnFirstDraw || didRecenter || package == null)
+            {
+                return;
+            }
+
+            Camera viewCamera = camera != null ? camera : targetCamera != null ? targetCamera : Camera.main;
+            if (viewCamera == null)
+            {
+                return;
+            }
+
+            Vector3 forward = viewCamera.transform.forward;
+            Vector3 horizontalForward = Vector3.ProjectOnPlane(forward, Vector3.up);
+            if (horizontalForward.sqrMagnitude > 0.0001f)
+            {
+                forward = horizontalForward.normalized;
+            }
+            else if (forward.sqrMagnitude > 0.0001f)
+            {
+                forward.Normalize();
+            }
+            else
+            {
+                forward = Vector3.forward;
+            }
+
+            float radius = package.Bounds.extents.magnitude;
+            float distance = Mathf.Max(0.5f, Mathf.Max(recenterDistanceMeters, radius * 1.25f));
+            transform.position = viewCamera.transform.position + forward * distance - package.Bounds.center;
+            transform.rotation = Quaternion.identity;
+            didRecenter = true;
+
+            Debug.Log(
+                "[SplatPack] Recentered sample in front of camera: "
+                + $"camera={viewCamera.name}, distance={distance:0.###}m, "
+                + $"packageCenter={package.Bounds.center}, rendererPosition={transform.position}.");
+        }
+
+        private Bounds ResolveDrawBounds()
+        {
+            if (package == null)
+            {
+                return new Bounds(transform.position, Vector3.one);
+            }
+
+            Vector3 localCenter = package.Bounds.center;
+            Vector3 localExtents = package.Bounds.extents;
+            Vector3 worldCenter = transform.TransformPoint(localCenter);
+            Vector3 axisX = transform.TransformVector(localExtents.x, 0f, 0f);
+            Vector3 axisY = transform.TransformVector(0f, localExtents.y, 0f);
+            Vector3 axisZ = transform.TransformVector(0f, 0f, localExtents.z);
+            Vector3 worldExtents = new Vector3(
+                Mathf.Abs(axisX.x) + Mathf.Abs(axisY.x) + Mathf.Abs(axisZ.x),
+                Mathf.Abs(axisX.y) + Mathf.Abs(axisY.y) + Mathf.Abs(axisZ.y),
+                Mathf.Abs(axisX.z) + Mathf.Abs(axisY.z) + Mathf.Abs(axisZ.z));
+            return new Bounds(worldCenter, worldExtents * 2f);
+        }
+
+        private static int ResolveProceduralDrawInstanceCount(Camera camera)
+        {
+            return 1;
+        }
+
         private static Vector3 ExtractCameraWorldPosition(Matrix4x4 worldToView)
         {
             Matrix4x4 viewToWorld = worldToView.inverse;
@@ -356,8 +436,10 @@ namespace SplatPack.Runtime
                 + $"cameraType={camera?.cameraType}, stereo={camera != null && camera.stereoEnabled}, "
                 + $"stereoEye={stereoEye}, xrEnabled={XRSettings.enabled}, xrActive={XRSettings.isDeviceActive}, "
                 + $"eye={XRSettings.eyeTextureWidth}x{XRSettings.eyeTextureHeight}, "
+                + $"rendererPosition={transform.position}, "
                 + $"projection={lastProjectionDispatchCpuMs:0.###}ms-cpu/{Mathf.Max(1, lastProjectionEyeCount)}eye, "
-                + $"splats={package.SplatCount}, chunks={package.ChunkCount}, vertices={package.SplatCount * 6}.");
+                + $"splats={package.SplatCount}, chunks={package.ChunkCount}, "
+                + $"vertices={package.SplatCount * 6 * ResolveProceduralDrawInstanceCount(camera)}.");
         }
 
         private void ReleaseBuffers()

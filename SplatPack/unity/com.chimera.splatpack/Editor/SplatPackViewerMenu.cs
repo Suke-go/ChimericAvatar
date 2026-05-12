@@ -125,7 +125,7 @@ namespace SplatPack.Editor
             var viewer = new GameObject("SplatPack Viewer");
             Undo.RegisterCreatedObjectUndo(viewer, "Create SplatPack Viewer");
             var renderer = viewer.AddComponent<SplatPackRenderer>();
-            renderer.Configure(asset, projection, material, Camera.main);
+            renderer.Configure(asset, projection, material, Camera.main, recenterOnFirstDraw: true);
 
             Selection.activeObject = viewer;
             EditorGUIUtility.PingObject(viewer);
