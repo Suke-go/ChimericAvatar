@@ -303,16 +303,25 @@ namespace SplatPack.Runtime
                 return;
             }
 
-#pragma warning disable 0618
-            if (material.SetPass(0))
+            var command = new CommandBuffer { name = "SplatPack Procedural Splats" };
+            try
             {
-                Graphics.DrawProceduralNow(
+                command.DrawProcedural(
+                    Matrix4x4.identity,
+                    material,
+                    0,
                     MeshTopology.Triangles,
                     package.SplatCount * 6,
-                    ResolveProceduralDrawInstanceCount(camera));
+                    ResolveProceduralDrawInstanceCount(camera),
+                    propertyBlock);
+                Graphics.ExecuteCommandBuffer(command);
             }
-#pragma warning restore 0618
-            MaybeLogDiagnostics(camera, "camera-post-now");
+            finally
+            {
+                command.Release();
+            }
+
+            MaybeLogDiagnostics(camera, "camera-post-command");
         }
 
         private bool TryPrepare(Camera camera, Material material)
