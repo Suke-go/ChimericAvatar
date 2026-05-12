@@ -11,9 +11,9 @@ Shader "Chimera/SplatPack Gaussian Splat"
     {
         Tags
         {
-            "RenderPipeline" = "UniversalPipeline"
             "Queue" = "Transparent"
             "RenderType" = "Transparent"
+            "IgnoreProjector" = "True"
         }
 
         Pass
@@ -30,7 +30,7 @@ Shader "Chimera/SplatPack Gaussian Splat"
             #pragma fragment frag
             #pragma multi_compile_instancing
 
-            #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
+            #include "UnityCG.cginc"
 
             struct SplatPackSplat
             {
@@ -130,7 +130,7 @@ Shader "Chimera/SplatPack Gaussian Splat"
                 float r2 = dot(input.gaussianUV, input.gaussianUV);
                 float alpha = exp(-0.5 * r2) * input.color.a * _OpacityScale;
                 clip(alpha - _AlphaClip);
-                return float4(input.color.rgb * alpha, alpha);
+                return float4(input.color.rgb, alpha);
             }
             ENDHLSL
         }

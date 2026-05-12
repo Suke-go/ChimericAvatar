@@ -50,6 +50,7 @@ namespace SplatPack.Runtime
         private float lastProjectionDispatchCpuMs;
         private int lastProjectionEyeCount;
         private bool didRecenter;
+        private bool warnedUnsupportedMaterial;
 
         public void Configure(
             SplatPackAsset packageAsset,
@@ -241,6 +242,19 @@ namespace SplatPack.Runtime
         {
             if (projectionCompute == null || projectionKernel < 0 || projectedBuffer == null)
             {
+                return false;
+            }
+
+            if (!material.shader.isSupported)
+            {
+                if (!warnedUnsupportedMaterial)
+                {
+                    warnedUnsupportedMaterial = true;
+                    Debug.LogError(
+                        "[SplatPack] Splat material shader is not supported by the current render pipeline or graphics API: "
+                        + material.shader.name);
+                }
+
                 return false;
             }
 
