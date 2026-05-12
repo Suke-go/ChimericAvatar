@@ -16,7 +16,7 @@ struct ProjectedSplat
     float4 axis0Ndc;
     float4 axis1Ndc;
     float4 color;
-    // x: depth, y: max radius pixels, z: valid flag, w: reserved.
+    // x: depth, y: max radius pixels after tail trim, z: valid flag, w: tail extent in Gaussian sigma units.
     float4 meta;
 };
 
@@ -34,12 +34,15 @@ float4 _ViewportSize;
 float _SplatScale;
 float _OpacityScale;
 float _OpacityPower;
+float _AlphaClip;
 float _MinScreenRadiusPixels;
 float _MaxScreenRadiusPixels;
 float _MaxScreenEccentricity;
 float _EccentricityOpacityPower;
 float _Kernel2DSize;
 float _EigenTermFloor;
+float _TailExtentMin;
+float _TailExtentMax;
 
 static const float kGaussianExtent = 2.8284271247461903;
 
@@ -156,15 +159,29 @@ void ProjectSplats(uint3 id : SV_DispatchThreadID)
     float minRadiusFade = saturate(areaRatio);
     float maxRadiusAreaFade = rsqrt(max(1.0, areaRatio));
     float clampAreaFade = min(minRadiusFade, maxRadiusAreaFade);
-    float2 axis0Ndc = 2.0 * dir0 * radius0Pixels / max(float2(1.0, 1.0), _ViewportSize.xy);
-    float2 axis1Ndc = 2.0 * dir1 * radius1Pixels / max(float2(1.0, 1.0), _ViewportSize.xy);
+    float alpha = pow(saturate(splat.color.a), max(0.01, _OpacityPower)) * clampAreaFade * radiusClampFade * eccentricityFade;
+    float centerAlpha = alpha * max(0.0, _OpacityScale);
+    float alphaClip = max(1e-6, _AlphaClip);
+    if (centerAlpha <= alphaClip)
+    {
+        _ProjectedSplats[projectedIndex] = InvalidProjectedSplat();
+        return;
+    }
+
+    float tailExtent = sqrt(max(1e-4, -2.0 * log(saturate(alphaClip / max(centerAlpha, 1e-6)))));
+    float tailExtentMin = clamp(_TailExtentMin, 0.25, kGaussianExtent);
+    float tailExtentMax = clamp(max(_TailExtentMax, tailExtentMin), tailExtentMin, kGaussianExtent);
+    tailExtent = clamp(tailExtent, tailExtentMin, tailExtentMax);
+    float tailScale = tailExtent / kGaussianExtent;
+
+    float2 axis0Ndc = 2.0 * dir0 * radius0Pixels * tailScale / max(float2(1.0, 1.0), _ViewportSize.xy);
+    float2 axis1Ndc = 2.0 * dir1 * radius1Pixels * tailScale / max(float2(1.0, 1.0), _ViewportSize.xy);
 
     ProjectedSplat projected;
     projected.clipCenter = clipCenter;
     projected.axis0Ndc = float4(axis0Ndc, 0.0, 0.0);
     projected.axis1Ndc = float4(axis1Ndc, 0.0, 0.0);
-    float alpha = pow(saturate(splat.color.a), max(0.01, _OpacityPower)) * clampAreaFade * radiusClampFade * eccentricityFade;
     projected.color = float4(saturate(splat.color.rgb), alpha);
-    projected.meta = float4(clipCenter.z / clipCenter.w, max(radius0Pixels, radius1Pixels), 1.0, 0.0);
+    projected.meta = float4(clipCenter.z / clipCenter.w, max(radius0Pixels, radius1Pixels) * tailScale, 1.0, tailExtent);
     _ProjectedSplats[projectedIndex] = projected;
 }

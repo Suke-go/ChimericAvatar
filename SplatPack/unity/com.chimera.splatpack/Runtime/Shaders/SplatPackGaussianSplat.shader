@@ -77,6 +77,7 @@ Shader "Chimera/SplatPack Gaussian Splat"
                 float4 positionHCS : SV_POSITION;
                 float2 gaussianUV : TEXCOORD0;
                 float radiusPixels : TEXCOORD1;
+                float tailExtent : TEXCOORD2;
                 float4 color : COLOR;
                 UNITY_VERTEX_OUTPUT_STEREO
             };
@@ -114,17 +115,20 @@ Shader "Chimera/SplatPack Gaussian Splat"
                     output.positionHCS = float4(0.0, 0.0, 2.0, 1.0);
                     output.gaussianUV = float2(99.0, 99.0);
                     output.radiusPixels = 0.0;
+                    output.tailExtent = 0.0;
                     output.color = 0.0;
                     return output;
                 }
 
                 float2 corner = QuadCorner(cornerIndex);
+                float tailExtent = projected.meta.w > 0.0 ? projected.meta.w : kGaussianExtent;
                 float4 clip = projected.clipCenter;
                 clip.xy += (projected.axis0Ndc.xy * corner.x + projected.axis1Ndc.xy * corner.y) * clip.w;
 
                 output.positionHCS = clip;
-                output.gaussianUV = corner * kGaussianExtent;
+                output.gaussianUV = corner * tailExtent;
                 output.radiusPixels = projected.meta.y;
+                output.tailExtent = tailExtent;
                 output.color = projected.color;
                 return output;
             }
@@ -133,11 +137,13 @@ Shader "Chimera/SplatPack Gaussian Splat"
             {
                 UNITY_SETUP_STEREO_EYE_INDEX_POST_VERTEX(input);
                 float r2 = dot(input.gaussianUV, input.gaussianUV);
-                float edgeDistance = 8.0 - r2;
+                float tailExtent = max(0.001, input.tailExtent);
+                float edgeDistance = tailExtent * tailExtent - r2;
                 clip(edgeDistance);
                 float alpha = exp(-0.5 * r2) * input.color.a * _OpacityScale;
                 float smallRadiusFade = saturate((2.0 - input.radiusPixels) * 0.5);
-                alpha *= saturate(edgeDistance * lerp(1.0, 0.625, smallRadiusFade));
+                float edgeScale = max(0.25, tailExtent * 0.5);
+                alpha *= saturate(edgeDistance / edgeScale * lerp(1.0, 0.625, smallRadiusFade));
                 clip(alpha - _AlphaClip);
                 return float4(input.color.rgb, alpha);
             }
