@@ -8,6 +8,11 @@ public static class SplatPackBuilder
 
     public static SplatPackPackage Build(GaussianSplatStream stream, int targetChunkSize)
     {
+        return Build(stream, new SplatPackBuildOptions { ChunkSize = targetChunkSize });
+    }
+
+    public static SplatPackPackage Build(GaussianSplatStream stream, SplatPackBuildOptions options)
+    {
         if (stream.Count <= 0)
         {
             return new SplatPackPackage
@@ -18,8 +23,10 @@ public static class SplatPackBuilder
             };
         }
 
+        int targetChunkSize = Math.Max(1, options.ChunkSize);
+        SplatPackRotationOrder rotationOrder = ResolveRotationOrder(stream, options.RotationOrder);
         SplatPackBounds bounds = ComputeBounds(stream);
-        int gridResolution = Math.Max(1, (int)Math.Ceiling(Math.Pow(stream.Count / (double)Math.Max(1, targetChunkSize), 1.0 / 3.0)));
+        int gridResolution = Math.Max(1, (int)Math.Ceiling(Math.Pow(stream.Count / (double)targetChunkSize, 1.0 / 3.0)));
 
         var order = new int[stream.Count];
         for (int i = 0; i < order.Length; i++)
@@ -47,7 +54,7 @@ public static class SplatPackBuilder
                    && GridKey(stream, bounds, gridResolution, order[cursor]) == key
                    && cursor - start < targetChunkSize)
             {
-                splats[cursor] = ConvertSplat(stream, order[cursor]);
+                splats[cursor] = ConvertSplat(stream, order[cursor], rotationOrder);
                 cursor++;
             }
 
@@ -92,7 +99,7 @@ public static class SplatPackBuilder
         return new SplatPackChunk(min, max, offset, count, 0);
     }
 
-    private static SplatPackSplat ConvertSplat(GaussianSplatStream stream, int index)
+    private static SplatPackSplat ConvertSplat(GaussianSplatStream stream, int index, SplatPackRotationOrder rotationOrder)
     {
         Vector3 position = Position(stream, index);
         Vector3 scale = new(
@@ -100,11 +107,7 @@ public static class SplatPackBuilder
             MathF.Exp(stream.ScalesLog[index * 3 + 1]),
             MathF.Exp(stream.ScalesLog[index * 3 + 2]));
 
-        Quaternion rotation = Normalize(new Quaternion(
-            stream.RotationsXYZW[index * 4 + 0],
-            stream.RotationsXYZW[index * 4 + 1],
-            stream.RotationsXYZW[index * 4 + 2],
-            stream.RotationsXYZW[index * 4 + 3]));
+        Quaternion rotation = DecodeRotation(stream, index, rotationOrder);
 
         Vector3 axis0 = Vector3.Transform(Vector3.UnitX, rotation) * scale.X;
         Vector3 axis1 = Vector3.Transform(Vector3.UnitY, rotation) * scale.Y;
@@ -135,6 +138,46 @@ public static class SplatPackBuilder
             stream.PositionsXYZ[index * 3 + 0],
             stream.PositionsXYZ[index * 3 + 1],
             stream.PositionsXYZ[index * 3 + 2]);
+    }
+
+    private static SplatPackRotationOrder ResolveRotationOrder(GaussianSplatStream stream, SplatPackRotationOrder requested)
+    {
+        if (requested != SplatPackRotationOrder.Auto || stream.Count <= 0)
+        {
+            return requested == SplatPackRotationOrder.Auto ? SplatPackRotationOrder.WXYZ : requested;
+        }
+
+        int sampleCount = Math.Min(stream.Count, 8192);
+        double rot0Abs = 0.0;
+        double rot3Abs = 0.0;
+        for (int i = 0; i < sampleCount; i++)
+        {
+            int offset = i * 4;
+            rot0Abs += Math.Abs(stream.RotationsRaw[offset]);
+            rot3Abs += Math.Abs(stream.RotationsRaw[offset + 3]);
+        }
+
+        return rot0Abs >= rot3Abs ? SplatPackRotationOrder.WXYZ : SplatPackRotationOrder.XYZW;
+    }
+
+    public static SplatPackRotationOrder DetectRotationOrder(GaussianSplatStream stream)
+    {
+        return ResolveRotationOrder(stream, SplatPackRotationOrder.Auto);
+    }
+
+    private static Quaternion DecodeRotation(GaussianSplatStream stream, int index, SplatPackRotationOrder rotationOrder)
+    {
+        int offset = index * 4;
+        float r0 = stream.RotationsRaw[offset];
+        float r1 = stream.RotationsRaw[offset + 1];
+        float r2 = stream.RotationsRaw[offset + 2];
+        float r3 = stream.RotationsRaw[offset + 3];
+
+        return rotationOrder switch
+        {
+            SplatPackRotationOrder.XYZW => Normalize(new Quaternion(r0, r1, r2, r3)),
+            _ => Normalize(new Quaternion(r1, r2, r3, r0)),
+        };
     }
 
     private static long GridKey(GaussianSplatStream stream, SplatPackBounds bounds, int resolution, int index)

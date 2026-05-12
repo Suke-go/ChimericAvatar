@@ -14,7 +14,7 @@ int32   version = 1
 int32   splatCount
 int32   chunkCount
 int32   splatStride = 96
-int32   chunkStride = 44
+int32   chunkStride = 36
 float3  boundsMin
 float3  boundsMax
 ```
@@ -47,6 +47,18 @@ float4 meta
 
 `axis0WS`, `axis1WS`, and `axis2WS` are world-space covariance axes after
 decoding PLY log-scale and quaternion rotation.
+
+The v1 compiler accepts both common 3DGS quaternion layouts:
+
+```text
+--rotation-order auto
+--rotation-order xyzw
+--rotation-order wxyz
+```
+
+`auto` samples the raw rotation columns and selects `wxyz` when `rot_0` looks
+like the scalar component, which is common for original Inria 3DGS exports.
+ChimericAvatar/GVRM-derived assets may use `xyzw`.
 
 `color.rgb` is DC color decoded as:
 

@@ -6,7 +6,7 @@ public sealed class GaussianSplatStream
     public required float[] PositionsXYZ;
     public required float[] OpacitiesRaw;
     public required float[] ScalesLog;
-    public required float[] RotationsXYZW;
+    public required float[] RotationsRaw;
     public float[]? ShDc;
     public float[]? ShRest;
     public int ShRestStride;
@@ -53,7 +53,7 @@ public sealed class GaussianSplatStream
             PositionsXYZ = ReadFloats(plyBytes, header.HeaderByteLength, stride, vertex.Count, RequireOffsets(floatOffsets, "x", "y", "z")),
             OpacitiesRaw = ReadFloats(plyBytes, header.HeaderByteLength, stride, vertex.Count, RequireOffsets(floatOffsets, "opacity")),
             ScalesLog = ReadFloats(plyBytes, header.HeaderByteLength, stride, vertex.Count, RequireOffsets(floatOffsets, "scale_0", "scale_1", "scale_2")),
-            RotationsXYZW = ReadFloats(plyBytes, header.HeaderByteLength, stride, vertex.Count, RequireOffsets(floatOffsets, "rot_0", "rot_1", "rot_2", "rot_3")),
+            RotationsRaw = ReadFloats(plyBytes, header.HeaderByteLength, stride, vertex.Count, RequireOffsets(floatOffsets, "rot_0", "rot_1", "rot_2", "rot_3")),
         };
 
         if (TryGetOffsets(floatOffsets, out int[]? dc, "f_dc_0", "f_dc_1", "f_dc_2") && dc != null)

@@ -33,7 +33,7 @@ dotnet run --project SplatPack/compiler/SplatPack.Compiler.csproj -- `
 Expected output:
 
 ```text
-SplatPack compiled: splats=..., chunks=..., output=...
+SplatPack compiled: splats=..., chunks=..., rotation=..., output=...
 ```
 
 For the first pass, the compiler supports:
@@ -45,6 +45,10 @@ opacity
 scale_0 scale_1 scale_2
 rot_0 rot_1 rot_2 rot_3
 ```
+
+Use `--rotation-order auto|xyzw|wxyz` when validating datasets from multiple
+exporters. The default `auto` path handles common original 3DGS PLY files where
+`rot_0` is the quaternion scalar component.
 
 `f_rest_*` is parsed but not yet written into the runtime v1 payload.
 
