@@ -35,6 +35,7 @@ float _SplatScale;
 float _OpacityScale;
 float _OpacityPower;
 float _AlphaClip;
+float _LowAlphaKnee;
 float _MinScreenRadiusPixels;
 float _MaxScreenRadiusPixels;
 float _MaxScreenEccentricity;
@@ -166,6 +167,21 @@ void ProjectSplats(uint3 id : SV_DispatchThreadID)
     {
         _ProjectedSplats[projectedIndex] = InvalidProjectedSplat();
         return;
+    }
+
+    float lowAlphaKnee = max(1.0, _LowAlphaKnee);
+    if (lowAlphaKnee > 1.0)
+    {
+        float kneeEnd = alphaClip * lowAlphaKnee;
+        float lowAlphaT = saturate((centerAlpha - alphaClip) / max(1e-6, kneeEnd - alphaClip));
+        float lowAlphaFade = lowAlphaT * lowAlphaT * (3.0 - 2.0 * lowAlphaT);
+        alpha *= lowAlphaFade;
+        centerAlpha *= lowAlphaFade;
+        if (centerAlpha <= alphaClip)
+        {
+            _ProjectedSplats[projectedIndex] = InvalidProjectedSplat();
+            return;
+        }
     }
 
     float tailExtent = sqrt(max(1e-4, -2.0 * log(saturate(alphaClip / max(centerAlpha, 1e-6)))));

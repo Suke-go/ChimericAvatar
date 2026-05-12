@@ -265,6 +265,7 @@ namespace SplatPack.Editor
                 "opacityPower=" + ReadFloat(serialized, "opacityPower"),
                 "splatScale=" + ReadFloat(serialized, "splatScale"),
                 "alphaClip=" + ReadFloat(serialized, "alphaClip"),
+                "lowAlphaKnee=" + ReadFloat(serialized, "lowAlphaKnee"),
                 "tailExtentMin=" + ReadFloat(serialized, "tailExtentMin"),
                 "tailExtentMax=" + ReadFloat(serialized, "tailExtentMax"),
                 "minScreenRadiusPixels=" + ReadFloat(serialized, "minScreenRadiusPixels"),
