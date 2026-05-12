@@ -10,6 +10,7 @@ namespace SplatPack.Runtime
     {
         None,
         ChunkDepth,
+        GpuDepthBucket,
         SplatDepth,
     }
 
@@ -17,7 +18,9 @@ namespace SplatPack.Runtime
     public sealed class SplatPackRenderer : MonoBehaviour
     {
         private const int ProjectionThreadGroupSize = 64;
+        private const int SortThreadGroupSize = 64;
         private const int MaxProjectedEyes = 2;
+        private const float StandaloneSafeOpacityScale = 1f;
         private const float StandaloneSafeMaxRadiusPixels = 48f;
         private const float MinimumTailAlphaClip = 0.002f;
 
@@ -28,6 +31,7 @@ namespace SplatPack.Runtime
         [Header("Rendering")]
         [SerializeField] private Material splatMaterial;
         [SerializeField] private ComputeShader projectionCompute;
+        [SerializeField] private ComputeShader sortCompute;
         [SerializeField] private Camera targetCamera;
 
         [Header("Placement")]
@@ -45,19 +49,29 @@ namespace SplatPack.Runtime
         [SerializeField] private bool enforceStandaloneRadiusCap = true;
 
         [Header("Sorting")]
-        [SerializeField] private SplatPackSortMode sortMode = SplatPackSortMode.SplatDepth;
+        [SerializeField] private SplatPackSortMode sortMode = SplatPackSortMode.GpuDepthBucket;
         [SerializeField] private int sortIntervalFrames = 1;
+        [SerializeField] private int xrSortIntervalFrames = 2;
+        [SerializeField] private int depthSortBinCount = 4096;
 
         [Header("Diagnostics")]
         [SerializeField] private bool logDiagnostics = true;
+        [SerializeField] private bool readbackProjectionDiagnostics;
         [SerializeField] private float diagnosticIntervalSeconds = 5f;
 
         private SplatPackPackage package;
         private ComputeBuffer splatBuffer;
         private ComputeBuffer drawOrderBuffer;
         private ComputeBuffer projectedBuffer;
+        private ComputeBuffer sortBinCountBuffer;
+        private ComputeBuffer sortBinOffsetBuffer;
         private MaterialPropertyBlock propertyBlock;
         private int projectionKernel = -1;
+        private int sortClearKernel = -1;
+        private int sortCountKernel = -1;
+        private int sortPrefixKernel = -1;
+        private int sortFillKernel = -1;
+        private int allocatedSortBinCount;
         private bool subscribed;
         private bool loggedFirstDiagnostics;
         private float nextDiagnosticLogTime;
@@ -68,8 +82,10 @@ namespace SplatPack.Runtime
         private SplatSortItem[] splatSortItems;
         private int lastDrawOrderSortFrame = -1;
         private float lastDrawOrderSortCpuMs;
+        private string lastSortPath = "not-run";
         private bool didRecenter;
         private bool warnedUnsupportedMaterial;
+        private bool warnedGpuSortUnavailable;
 
         private struct ChunkSortItem
         {
@@ -88,13 +104,15 @@ namespace SplatPack.Runtime
             ComputeShader projection,
             Material material,
             Camera camera = null,
-            bool recenterOnFirstDraw = false)
+            bool recenterOnFirstDraw = false,
+            ComputeShader sort = null)
         {
             asset = packageAsset;
             projectionCompute = projection;
             splatMaterial = material;
             targetCamera = camera;
             recenterInFrontOfCameraOnFirstDraw = recenterOnFirstDraw;
+            sortCompute = sort;
             didRecenter = false;
         }
 
@@ -158,6 +176,7 @@ namespace SplatPack.Runtime
                 projectionKernel = projectionCompute.FindKernel("ProjectSplats");
             }
 
+            ResetSortState();
             Debug.Log($"[SplatPack] Loaded package: splats={package.SplatCount}, chunks={package.ChunkCount}.");
         }
 
@@ -331,7 +350,7 @@ namespace SplatPack.Runtime
             }
 
             int frame = Time.frameCount;
-            int interval = Mathf.Max(1, sortIntervalFrames);
+            int interval = ResolveSortIntervalFrames(camera);
             if (lastDrawOrderSortFrame >= 0 && frame - lastDrawOrderSortFrame < interval)
             {
                 return;
@@ -340,19 +359,201 @@ namespace SplatPack.Runtime
             Diagnostics.Stopwatch stopwatch = Diagnostics.Stopwatch.StartNew();
             Vector3 cameraPosition = camera.transform.position;
             Vector3 cameraForward = camera.transform.forward.normalized;
-            if (sortMode == SplatPackSortMode.SplatDepth && splatSortItems != null)
+            bool uploadedCpuOrder = false;
+            if (sortMode == SplatPackSortMode.GpuDepthBucket)
+            {
+                if (TryUpdateGpuDepthBucketOrder(camera))
+                {
+                    lastSortPath = $"gpu-depth-bucket/{allocatedSortBinCount}";
+                }
+                else
+                {
+                    UpdateChunkDepthOrder(cameraPosition, cameraForward);
+                    uploadedCpuOrder = true;
+                    lastSortPath = $"chunk-depth-fallback/{package.ChunkCount}";
+                }
+            }
+            else if (sortMode == SplatPackSortMode.SplatDepth && splatSortItems != null)
             {
                 UpdateSplatDepthOrder(cameraPosition, cameraForward);
+                uploadedCpuOrder = true;
+                lastSortPath = $"cpu-splat-depth/{package.SplatCount}";
             }
             else if (chunkSortItems != null)
             {
                 UpdateChunkDepthOrder(cameraPosition, cameraForward);
+                uploadedCpuOrder = true;
+                lastSortPath = $"chunk-depth/{package.ChunkCount}";
             }
 
-            drawOrderBuffer.SetData(drawOrderCpu);
+            if (uploadedCpuOrder)
+            {
+                drawOrderBuffer.SetData(drawOrderCpu);
+            }
+
             stopwatch.Stop();
             lastDrawOrderSortFrame = frame;
             lastDrawOrderSortCpuMs = (float)stopwatch.Elapsed.TotalMilliseconds;
+        }
+
+        private bool TryUpdateGpuDepthBucketOrder(Camera camera)
+        {
+            if (camera == null || package == null || package.SplatCount <= 1 || splatBuffer == null || drawOrderBuffer == null)
+            {
+                return false;
+            }
+
+            if (!EnsureGpuSortResources())
+            {
+                return false;
+            }
+
+            if (!TryResolveSortDepthRange(camera, out float depthMin, out float depthInvRange))
+            {
+                return false;
+            }
+
+            try
+            {
+                sortCompute.SetInt("_SplatCount", package.SplatCount);
+                sortCompute.SetInt("_SortBinCount", allocatedSortBinCount);
+                sortCompute.SetFloat("_DepthMin", depthMin);
+                sortCompute.SetFloat("_DepthInvRange", depthInvRange);
+                sortCompute.SetVector("_CameraPosition", camera.transform.position);
+                sortCompute.SetVector("_CameraForward", camera.transform.forward.normalized);
+                sortCompute.SetMatrix("_SplatLocalToWorld", transform.localToWorldMatrix);
+
+                BindSortBuffers(sortClearKernel);
+                BindSortBuffers(sortCountKernel);
+                BindSortBuffers(sortPrefixKernel);
+                BindSortBuffers(sortFillKernel);
+
+                sortCompute.Dispatch(sortClearKernel, Mathf.CeilToInt(allocatedSortBinCount / (float)SortThreadGroupSize), 1, 1);
+                sortCompute.Dispatch(sortCountKernel, Mathf.CeilToInt(package.SplatCount / (float)SortThreadGroupSize), 1, 1);
+                sortCompute.Dispatch(sortPrefixKernel, 1, 1, 1);
+                sortCompute.Dispatch(sortFillKernel, Mathf.CeilToInt(package.SplatCount / (float)SortThreadGroupSize), 1, 1);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                if (!warnedGpuSortUnavailable)
+                {
+                    warnedGpuSortUnavailable = true;
+                    Debug.LogWarning("[SplatPack] GPU depth-bucket sort failed; falling back to chunk sorting. " + ex.Message);
+                }
+
+                return false;
+            }
+        }
+
+        private bool EnsureGpuSortResources()
+        {
+            if (sortCompute == null)
+            {
+                sortCompute = Resources.Load<ComputeShader>("SplatPackDepthSort");
+            }
+
+            if (sortCompute == null)
+            {
+                if (!warnedGpuSortUnavailable)
+                {
+                    warnedGpuSortUnavailable = true;
+                    Debug.LogWarning("[SplatPack] GPU depth-bucket sort is unavailable because no sort compute shader is assigned.");
+                }
+
+                return false;
+            }
+
+            if (sortClearKernel < 0 || sortCountKernel < 0 || sortPrefixKernel < 0 || sortFillKernel < 0)
+            {
+                try
+                {
+                    sortClearKernel = sortCompute.FindKernel("ClearBins");
+                    sortCountKernel = sortCompute.FindKernel("CountBins");
+                    sortPrefixKernel = sortCompute.FindKernel("PrefixBins");
+                    sortFillKernel = sortCompute.FindKernel("FillDrawOrder");
+                }
+                catch (Exception ex)
+                {
+                    if (!warnedGpuSortUnavailable)
+                    {
+                        warnedGpuSortUnavailable = true;
+                        Debug.LogWarning("[SplatPack] GPU depth-bucket sort kernel lookup failed; falling back to chunk sorting. " + ex.Message);
+                    }
+
+                    return false;
+                }
+            }
+
+            int requestedBinCount = Mathf.Clamp(depthSortBinCount, 256, 8192);
+            if (sortBinCountBuffer != null && allocatedSortBinCount == requestedBinCount)
+            {
+                return true;
+            }
+
+            ReleaseSortBuffers();
+            allocatedSortBinCount = requestedBinCount;
+            sortBinCountBuffer = new ComputeBuffer(allocatedSortBinCount, sizeof(uint), ComputeBufferType.Structured);
+            sortBinOffsetBuffer = new ComputeBuffer(allocatedSortBinCount, sizeof(uint), ComputeBufferType.Structured);
+            return true;
+        }
+
+        private void BindSortBuffers(int kernel)
+        {
+            sortCompute.SetBuffer(kernel, "_Splats", splatBuffer);
+            sortCompute.SetBuffer(kernel, "_DrawOrder", drawOrderBuffer);
+            sortCompute.SetBuffer(kernel, "_BinCounts", sortBinCountBuffer);
+            sortCompute.SetBuffer(kernel, "_BinOffsets", sortBinOffsetBuffer);
+        }
+
+        private bool TryResolveSortDepthRange(Camera camera, out float depthMin, out float depthInvRange)
+        {
+            depthMin = 0f;
+            depthInvRange = 1f;
+            if (camera == null || package == null)
+            {
+                return false;
+            }
+
+            Vector3 forward = camera.transform.forward.normalized;
+            Vector3 cameraPosition = camera.transform.position;
+            Bounds bounds = ResolveDrawBounds();
+            Vector3 center = bounds.center;
+            Vector3 extents = bounds.extents;
+            if (extents.sqrMagnitude <= 1e-8f)
+            {
+                extents = Vector3.one * 0.5f;
+            }
+
+            float minDepth = float.PositiveInfinity;
+            float maxDepth = float.NegativeInfinity;
+            for (int x = -1; x <= 1; x += 2)
+            {
+                for (int y = -1; y <= 1; y += 2)
+                {
+                    for (int z = -1; z <= 1; z += 2)
+                    {
+                        Vector3 corner = center + Vector3.Scale(extents, new Vector3(x, y, z));
+                        float depth = Vector3.Dot(corner - cameraPosition, forward);
+                        minDepth = Mathf.Min(minDepth, depth);
+                        maxDepth = Mathf.Max(maxDepth, depth);
+                    }
+                }
+            }
+
+            if (float.IsNaN(minDepth)
+                || float.IsNaN(maxDepth)
+                || float.IsInfinity(minDepth)
+                || float.IsInfinity(maxDepth))
+            {
+                return false;
+            }
+
+            float range = Mathf.Max(0.01f, maxDepth - minDepth);
+            float padding = Mathf.Max(0.05f, range * 0.02f);
+            depthMin = minDepth - padding;
+            depthInvRange = 1f / (range + padding * 2f);
+            return true;
         }
 
         private void UpdateChunkDepthOrder(Vector3 cameraPosition, Vector3 cameraForward)
@@ -470,7 +671,8 @@ namespace SplatPack.Runtime
 
         private float ResolveOpacityScale()
         {
-            return Mathf.Max(0f, opacityScale);
+            float value = Mathf.Max(0f, opacityScale);
+            return enforceStandaloneRadiusCap ? Mathf.Min(value, StandaloneSafeOpacityScale) : value;
         }
 
         private float ResolveSplatScale()
@@ -488,6 +690,17 @@ namespace SplatPack.Runtime
         {
             float value = Mathf.Max(minScreenRadiusPixels, maxScreenRadiusPixels);
             return enforceStandaloneRadiusCap ? Mathf.Min(value, StandaloneSafeMaxRadiusPixels) : value;
+        }
+
+        private int ResolveSortIntervalFrames(Camera camera)
+        {
+            int interval = Mathf.Max(1, sortIntervalFrames);
+            if ((camera != null && camera.stereoEnabled) || XRSettings.enabled || XRSettings.isDeviceActive)
+            {
+                interval = Mathf.Max(interval, xrSortIntervalFrames);
+            }
+
+            return interval;
         }
 
         private Material ResolveMaterial()
@@ -622,19 +835,24 @@ namespace SplatPack.Runtime
 
         private string BuildSortDiagnostics()
         {
-            return sortMode switch
-            {
-                SplatPackSortMode.ChunkDepth => $"chunk-depth/{package.ChunkCount}/{lastDrawOrderSortCpuMs:0.###}ms-cpu",
-                SplatPackSortMode.SplatDepth => $"splat-depth/{package.SplatCount}/{lastDrawOrderSortCpuMs:0.###}ms-cpu",
-                _ => "off",
-            };
+            return sortMode == SplatPackSortMode.None
+                ? "off"
+                : $"{lastSortPath}/{lastDrawOrderSortCpuMs:0.###}ms-cpu";
         }
 
         private string BuildProjectionDiagnostics(Camera camera)
         {
+            string cameraInfo = camera != null
+                ? $"cameraPos={camera.transform.position}, cameraForward={camera.transform.forward}, "
+                : string.Empty;
+            if (!readbackProjectionDiagnostics)
+            {
+                return cameraInfo + "projectionReadback=off, ";
+            }
+
             if (projectedBuffer == null || package == null || package.SplatCount <= 0)
             {
-                return "projected=unavailable, ";
+                return cameraInfo + "projected=unavailable, ";
             }
 
             try
@@ -674,9 +892,6 @@ namespace SplatPack.Runtime
                     }
                 }
 
-                string cameraInfo = camera != null
-                    ? $"cameraPos={camera.transform.position}, cameraForward={camera.transform.forward}, "
-                    : string.Empty;
                 return cameraInfo
                     + $"validProjected={validCount}/{package.SplatCount}, "
                     + $"firstValid={firstValid}, firstNdc=({firstNdc.x:0.###},{firstNdc.y:0.###}), "
@@ -694,12 +909,33 @@ namespace SplatPack.Runtime
             splatBuffer?.Release();
             drawOrderBuffer?.Release();
             projectedBuffer?.Release();
+            ReleaseSortBuffers();
             splatBuffer = null;
             drawOrderBuffer = null;
             projectedBuffer = null;
             drawOrderCpu = null;
             chunkSortItems = null;
             splatSortItems = null;
+        }
+
+        private void ReleaseSortBuffers()
+        {
+            sortBinCountBuffer?.Release();
+            sortBinOffsetBuffer?.Release();
+            sortBinCountBuffer = null;
+            sortBinOffsetBuffer = null;
+            allocatedSortBinCount = 0;
+        }
+
+        private void ResetSortState()
+        {
+            ReleaseSortBuffers();
+            sortClearKernel = -1;
+            sortCountKernel = -1;
+            sortPrefixKernel = -1;
+            sortFillKernel = -1;
+            lastSortPath = "not-run";
+            warnedGpuSortUnavailable = false;
         }
     }
 }

@@ -115,6 +115,8 @@ namespace SplatPack.Editor
                 return;
             }
 
+            ComputeShader sort = FindSortCompute();
+
             Material material = FindOrCreateMaterial();
             if (material == null)
             {
@@ -125,10 +127,25 @@ namespace SplatPack.Editor
             var viewer = new GameObject("SplatPack Viewer");
             Undo.RegisterCreatedObjectUndo(viewer, "Create SplatPack Viewer");
             var renderer = viewer.AddComponent<SplatPackRenderer>();
-            renderer.Configure(asset, projection, material, Camera.main, recenterOnFirstDraw: true);
+            renderer.Configure(asset, projection, material, Camera.main, recenterOnFirstDraw: true, sort: sort);
 
             Selection.activeObject = viewer;
             EditorGUIUtility.PingObject(viewer);
+        }
+
+        private static ComputeShader FindSortCompute()
+        {
+            string[] guids = AssetDatabase.FindAssets("SplatPackDepthSort t:ComputeShader");
+            foreach (string guid in guids)
+            {
+                string path = AssetDatabase.GUIDToAssetPath(guid);
+                if (path.Contains("com.chimera.splatpack"))
+                {
+                    return AssetDatabase.LoadAssetAtPath<ComputeShader>(path);
+                }
+            }
+
+            return null;
         }
 
         private static ComputeShader FindProjectionCompute()

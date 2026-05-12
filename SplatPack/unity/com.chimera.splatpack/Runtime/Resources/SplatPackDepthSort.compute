@@ -1,0 +1,91 @@
+#pragma kernel ClearBins
+#pragma kernel CountBins
+#pragma kernel PrefixBins
+#pragma kernel FillDrawOrder
+
+struct SplatPackSplat
+{
+    float4 centerWS;
+    float4 axis0WS;
+    float4 axis1WS;
+    float4 axis2WS;
+    float4 color;
+    float4 meta;
+};
+
+StructuredBuffer<SplatPackSplat> _Splats;
+RWStructuredBuffer<uint> _DrawOrder;
+RWStructuredBuffer<uint> _BinCounts;
+RWStructuredBuffer<uint> _BinOffsets;
+
+int _SplatCount;
+int _SortBinCount;
+float _DepthMin;
+float _DepthInvRange;
+float3 _CameraPosition;
+float3 _CameraForward;
+float4x4 _SplatLocalToWorld;
+
+uint ResolveDepthBin(uint splatIndex)
+{
+    float3 centerWS = mul(_SplatLocalToWorld, float4(_Splats[splatIndex].centerWS.xyz, 1.0)).xyz;
+    float depth = dot(centerWS - _CameraPosition, _CameraForward);
+    float normalizedDepth = saturate((depth - _DepthMin) * _DepthInvRange);
+    uint binCountMinusOne = (uint)max(0, _SortBinCount - 1);
+    return min(binCountMinusOne, (uint)floor(normalizedDepth * (float)binCountMinusOne));
+}
+
+[numthreads(64, 1, 1)]
+void ClearBins(uint3 id : SV_DispatchThreadID)
+{
+    uint index = id.x;
+    if (index >= (uint)_SortBinCount)
+    {
+        return;
+    }
+
+    _BinCounts[index] = 0;
+    _BinOffsets[index] = 0;
+}
+
+[numthreads(64, 1, 1)]
+void CountBins(uint3 id : SV_DispatchThreadID)
+{
+    uint index = id.x;
+    if (index >= (uint)_SplatCount)
+    {
+        return;
+    }
+
+    uint bin = ResolveDepthBin(index);
+    uint ignored;
+    InterlockedAdd(_BinCounts[bin], 1, ignored);
+}
+
+[numthreads(1, 1, 1)]
+void PrefixBins(uint3 id : SV_DispatchThreadID)
+{
+    uint offset = 0;
+    for (int bin = _SortBinCount - 1; bin >= 0; bin--)
+    {
+        uint count = _BinCounts[bin];
+        _BinOffsets[bin] = offset;
+        _BinCounts[bin] = 0;
+        offset += count;
+    }
+}
+
+[numthreads(64, 1, 1)]
+void FillDrawOrder(uint3 id : SV_DispatchThreadID)
+{
+    uint index = id.x;
+    if (index >= (uint)_SplatCount)
+    {
+        return;
+    }
+
+    uint bin = ResolveDepthBin(index);
+    uint slot;
+    InterlockedAdd(_BinCounts[bin], 1, slot);
+    _DrawOrder[_BinOffsets[bin] + slot] = index;
+}
