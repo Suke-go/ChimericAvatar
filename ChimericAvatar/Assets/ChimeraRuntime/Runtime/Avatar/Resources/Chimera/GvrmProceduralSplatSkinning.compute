@@ -1,0 +1,359 @@
+#pragma kernel SkinVertices
+#pragma kernel SkinSplats
+
+struct ProceduralSplat
+{
+    float4 centerWS;
+    float4 axis0WS;
+    float4 axis1WS;
+    float4 axis2WS;
+    float4 color;
+    float4 meta;
+};
+
+struct SplatSkinningInput
+{
+    float4 meshPosition;
+    float4 relativePosition;
+    float4 axis0RestMeshLocal;
+    float4 axis1RestMeshLocal;
+    float4 axis2RestMeshLocal;
+    float4 boneIndices;
+    float4 boneWeights;
+    float4 color;
+    float4 meta;
+};
+
+struct VertexSkinningInput
+{
+    float4 meshPosition;
+    float4 boneIndices;
+    float4 boneWeights;
+};
+
+struct GpuMatrix4x4
+{
+    float4 row0;
+    float4 row1;
+    float4 row2;
+    float4 row3;
+};
+
+struct VertexSkinningState
+{
+    float4 skinnedMeshPosition;
+    float4 skinDeltaRow0;
+    float4 skinDeltaRow1;
+    float4 skinDeltaRow2;
+    float4 covarianceRow0;
+    float4 covarianceRow1;
+    float4 covarianceRow2;
+};
+
+StructuredBuffer<SplatSkinningInput> _SkinningInputs;
+StructuredBuffer<VertexSkinningInput> _VertexSkinningInputs;
+StructuredBuffer<GpuMatrix4x4> _CurrentBoneMatrices;
+StructuredBuffer<GpuMatrix4x4> _RestSkinInverseMatrices;
+RWStructuredBuffer<VertexSkinningState> _VertexSkinningStates;
+RWStructuredBuffer<ProceduralSplat> _OutputSplats;
+
+int _SplatCount;
+int _VertexCount;
+float4x4 _MeshLocalToWorld;
+float4x4 _GsLocalToWorld;
+float4x4 _GsRotation;
+float4x4 _GsRotationInverse;
+int _MatchWebCovarianceQuaternionYFlip;
+
+float4x4 ToMatrix(GpuMatrix4x4 value)
+{
+    return float4x4(
+        value.row0.x, value.row0.y, value.row0.z, value.row0.w,
+        value.row1.x, value.row1.y, value.row1.z, value.row1.w,
+        value.row2.x, value.row2.y, value.row2.z, value.row2.w,
+        value.row3.x, value.row3.y, value.row3.z, value.row3.w);
+}
+
+float4x4 AddWeightedMatrix(float4x4 currentValue, float4x4 source, float weight)
+{
+    return currentValue + source * weight;
+}
+
+float4x4 ZeroMatrix()
+{
+    return float4x4(
+        0.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, 0.0);
+}
+
+float4x4 IdentityMatrix()
+{
+    return float4x4(
+        1.0, 0.0, 0.0, 0.0,
+        0.0, 1.0, 0.0, 0.0,
+        0.0, 0.0, 1.0, 0.0,
+        0.0, 0.0, 0.0, 1.0);
+}
+
+float4x4 WeightedCurrentBoneMatrix(float4 indices, float4 weights)
+{
+    float4x4 result = ZeroMatrix();
+    float totalWeight = 0.0;
+
+    if (weights.x > 0.000001)
+    {
+        result = AddWeightedMatrix(result, ToMatrix(_CurrentBoneMatrices[(uint)indices.x]), weights.x);
+        totalWeight += weights.x;
+    }
+    if (weights.y > 0.000001)
+    {
+        result = AddWeightedMatrix(result, ToMatrix(_CurrentBoneMatrices[(uint)indices.y]), weights.y);
+        totalWeight += weights.y;
+    }
+    if (weights.z > 0.000001)
+    {
+        result = AddWeightedMatrix(result, ToMatrix(_CurrentBoneMatrices[(uint)indices.z]), weights.z);
+        totalWeight += weights.z;
+    }
+    if (weights.w > 0.000001)
+    {
+        result = AddWeightedMatrix(result, ToMatrix(_CurrentBoneMatrices[(uint)indices.w]), weights.w);
+        totalWeight += weights.w;
+    }
+
+    if (totalWeight <= 0.000001)
+    {
+        result = IdentityMatrix();
+    }
+
+    return result;
+}
+
+float3 TransformPoint(float4x4 matrixValue, float3 positionValue)
+{
+    return mul(matrixValue, float4(positionValue, 1.0)).xyz;
+}
+
+float3 TransformVector(float4x4 matrixValue, float3 vectorValue)
+{
+    return mul(matrixValue, float4(vectorValue, 0.0)).xyz;
+}
+
+float3 TransformVectorRows(float4 row0, float4 row1, float4 row2, float3 vectorValue)
+{
+    return float3(dot(row0.xyz, vectorValue), dot(row1.xyz, vectorValue), dot(row2.xyz, vectorValue));
+}
+
+float4 MatrixRow0(float4x4 matrixValue)
+{
+    return float4(matrixValue._m00, matrixValue._m01, matrixValue._m02, matrixValue._m03);
+}
+
+float4 MatrixRow1(float4x4 matrixValue)
+{
+    return float4(matrixValue._m10, matrixValue._m11, matrixValue._m12, matrixValue._m13);
+}
+
+float4 MatrixRow2(float4x4 matrixValue)
+{
+    return float4(matrixValue._m20, matrixValue._m21, matrixValue._m22, matrixValue._m23);
+}
+
+float4x4 RotationMatrixFromColumns(float3 xAxis, float3 yAxis, float3 zAxis)
+{
+    return float4x4(
+        xAxis.x, yAxis.x, zAxis.x, 0.0,
+        xAxis.y, yAxis.y, zAxis.y, 0.0,
+        xAxis.z, yAxis.z, zAxis.z, 0.0,
+        0.0, 0.0, 0.0, 1.0);
+}
+
+float4x4 OrthonormalRotationFromMatrix(float4x4 matrixValue)
+{
+    float4x4 result = IdentityMatrix();
+    float3 xAxis = TransformVector(matrixValue, float3(1.0, 0.0, 0.0));
+    float3 yAxis = TransformVector(matrixValue, float3(0.0, 1.0, 0.0));
+    float xLenSq = dot(xAxis, xAxis);
+    float yLenSq = dot(yAxis, yAxis);
+    if (xLenSq > 1e-12 && yLenSq > 1e-12)
+    {
+        xAxis *= rsqrt(xLenSq);
+        yAxis -= xAxis * dot(yAxis, xAxis);
+        yLenSq = dot(yAxis, yAxis);
+        if (yLenSq > 1e-12)
+        {
+            yAxis *= rsqrt(yLenSq);
+            float3 zAxis = cross(xAxis, yAxis);
+            float zLenSq = dot(zAxis, zAxis);
+            if (zLenSq > 1e-12)
+            {
+                zAxis *= rsqrt(zLenSq);
+                result = RotationMatrixFromColumns(xAxis, yAxis, zAxis);
+            }
+        }
+
+    }
+
+    return result;
+}
+
+float4 QuaternionFromRotationMatrix(float4x4 matrixValue)
+{
+    float4 result = float4(0.0, 0.0, 0.0, 1.0);
+    float trace = matrixValue._m00 + matrixValue._m11 + matrixValue._m22;
+    if (trace > 0.0)
+    {
+        float s = 0.5 / sqrt(max(1e-12, trace + 1.0));
+        result = float4(
+            (matrixValue._m21 - matrixValue._m12) * s,
+            (matrixValue._m02 - matrixValue._m20) * s,
+            (matrixValue._m10 - matrixValue._m01) * s,
+            0.25 / s);
+    }
+    else if (matrixValue._m00 > matrixValue._m11 && matrixValue._m00 > matrixValue._m22)
+    {
+        float s = 2.0 * sqrt(max(1e-12, 1.0 + matrixValue._m00 - matrixValue._m11 - matrixValue._m22));
+        result = float4(
+            0.25 * s,
+            (matrixValue._m01 + matrixValue._m10) / s,
+            (matrixValue._m02 + matrixValue._m20) / s,
+            (matrixValue._m21 - matrixValue._m12) / s);
+    }
+    else if (matrixValue._m11 > matrixValue._m22)
+    {
+        float s = 2.0 * sqrt(max(1e-12, 1.0 + matrixValue._m11 - matrixValue._m00 - matrixValue._m22));
+        result = float4(
+            (matrixValue._m01 + matrixValue._m10) / s,
+            0.25 * s,
+            (matrixValue._m12 + matrixValue._m21) / s,
+            (matrixValue._m02 - matrixValue._m20) / s);
+    }
+    else
+    {
+        float zScale = 2.0 * sqrt(max(1e-12, 1.0 + matrixValue._m22 - matrixValue._m00 - matrixValue._m11));
+        result = float4(
+            (matrixValue._m02 + matrixValue._m20) / zScale,
+            (matrixValue._m12 + matrixValue._m21) / zScale,
+            0.25 * zScale,
+            (matrixValue._m10 - matrixValue._m01) / zScale);
+    }
+
+    return result;
+}
+
+float4x4 RotationMatrixFromQuaternion(float4 q)
+{
+    q *= rsqrt(max(1e-12, dot(q, q)));
+    float x = q.x;
+    float y = q.y;
+    float z = q.z;
+    float w = q.w;
+    float x2 = x + x;
+    float y2 = y + y;
+    float z2 = z + z;
+    float xx = x * x2;
+    float xy = x * y2;
+    float xz = x * z2;
+    float yy = y * y2;
+    float yz = y * z2;
+    float zz = z * z2;
+    float wx = w * x2;
+    float wy = w * y2;
+    float wz = w * z2;
+
+    return float4x4(
+        1.0 - (yy + zz), xy - wz, xz + wy, 0.0,
+        xy + wz, 1.0 - (xx + zz), yz - wx, 0.0,
+        xz - wy, yz + wx, 1.0 - (xx + yy), 0.0,
+        0.0, 0.0, 0.0, 1.0);
+}
+
+float4x4 WebParityCovarianceRotation(float4x4 skinDelta)
+{
+    float4x4 skinRotation = OrthonormalRotationFromMatrix(skinDelta);
+    float4x4 relativeRotation = mul(_GsRotationInverse, mul(skinRotation, _GsRotation));
+    if (_MatchWebCovarianceQuaternionYFlip != 0)
+    {
+        float4 q = QuaternionFromRotationMatrix(relativeRotation);
+        q.y = -q.y;
+        relativeRotation = RotationMatrixFromQuaternion(q);
+    }
+
+    return relativeRotation;
+}
+
+[numthreads(64, 1, 1)]
+void SkinVertices(uint3 id : SV_DispatchThreadID)
+{
+    uint index = id.x;
+    if (index >= (uint)_VertexCount)
+    {
+        return;
+    }
+
+    VertexSkinningInput input = _VertexSkinningInputs[index];
+    float4x4 currentSkin = WeightedCurrentBoneMatrix(input.boneIndices, input.boneWeights);
+    float4x4 skinDelta = mul(currentSkin, ToMatrix(_RestSkinInverseMatrices[index]));
+    float3 meshVertex = TransformPoint(currentSkin, input.meshPosition.xyz);
+    float4x4 relativeRotation = WebParityCovarianceRotation(skinDelta);
+    float4x4 covarianceAxisRotation = transpose(relativeRotation);
+
+    VertexSkinningState state;
+    state.skinnedMeshPosition = float4(meshVertex, 1.0);
+    state.skinDeltaRow0 = MatrixRow0(skinDelta);
+    state.skinDeltaRow1 = MatrixRow1(skinDelta);
+    state.skinDeltaRow2 = MatrixRow2(skinDelta);
+    state.covarianceRow0 = MatrixRow0(covarianceAxisRotation);
+    state.covarianceRow1 = MatrixRow1(covarianceAxisRotation);
+    state.covarianceRow2 = MatrixRow2(covarianceAxisRotation);
+    _VertexSkinningStates[index] = state;
+}
+
+[numthreads(64, 1, 1)]
+void SkinSplats(uint3 id : SV_DispatchThreadID)
+{
+    uint index = id.x;
+    if (index >= (uint)_SplatCount)
+    {
+        return;
+    }
+
+    SplatSkinningInput input = _SkinningInputs[index];
+    uint vertexMax = (uint)max(_VertexCount - 1, 0);
+    uint vertexIndex = min((uint)max(input.meta.y + 0.5, 0.0), vertexMax);
+    VertexSkinningState vertexState = _VertexSkinningStates[vertexIndex];
+
+    float3 relative = TransformVectorRows(
+        vertexState.skinDeltaRow0,
+        vertexState.skinDeltaRow1,
+        vertexState.skinDeltaRow2,
+        input.relativePosition.xyz);
+    float3 centerWS = TransformPoint(_MeshLocalToWorld, vertexState.skinnedMeshPosition.xyz + relative);
+
+    float3 axis0Mesh = TransformVectorRows(
+        vertexState.covarianceRow0,
+        vertexState.covarianceRow1,
+        vertexState.covarianceRow2,
+        input.axis0RestMeshLocal.xyz);
+    float3 axis1Mesh = TransformVectorRows(
+        vertexState.covarianceRow0,
+        vertexState.covarianceRow1,
+        vertexState.covarianceRow2,
+        input.axis1RestMeshLocal.xyz);
+    float3 axis2Mesh = TransformVectorRows(
+        vertexState.covarianceRow0,
+        vertexState.covarianceRow1,
+        vertexState.covarianceRow2,
+        input.axis2RestMeshLocal.xyz);
+
+    ProceduralSplat output;
+    output.centerWS = float4(centerWS, 1.0);
+    output.axis0WS = float4(TransformVector(_GsLocalToWorld, axis0Mesh), 0.0);
+    output.axis1WS = float4(TransformVector(_GsLocalToWorld, axis1Mesh), 0.0);
+    output.axis2WS = float4(TransformVector(_GsLocalToWorld, axis2Mesh), 0.0);
+    output.color = input.color;
+    output.meta = input.meta;
+    _OutputSplats[index] = output;
+}
