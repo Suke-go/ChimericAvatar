@@ -13,10 +13,29 @@ renders them with a projected splat cache.
 
 2. Put the `.splatpack` file under `Assets/`.
 3. Unity imports it as a `SplatPackAsset`.
-4. Add `SplatPackRenderer` to a GameObject.
-5. Assign the imported `SplatPackAsset`.
-6. Assign `SplatPackProjection.compute`.
-7. Use the default shader `Chimera/SplatPack Gaussian Splat`.
+4. Select the imported `SplatPackAsset`.
+5. Run `Tools -> SplatPack -> Create Viewer From Selection`.
+6. Press Play.
+
+The menu command creates a `SplatPack Viewer` GameObject, assigns
+`SplatPackRenderer`, finds `SplatPackProjection.compute`, and creates a material
+using shader `Chimera/SplatPack Gaussian Splat` if needed.
+
+Manual setup is also supported:
+
+```text
+GameObject
+  -> SplatPackRenderer
+
+Asset
+  -> imported SplatPackAsset
+
+Projection Compute
+  -> SplatPackProjection.compute
+
+Splat Material
+  -> material using shader "Chimera/SplatPack Gaussian Splat"
+```
 
 ## Current Runtime
 

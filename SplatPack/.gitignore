@@ -3,3 +3,11 @@ compiler/obj/
 experiments/external/
 experiments/data/
 experiments/results/
+Library/
+Logs/
+Packages/
+ProjectSettings/
+Temp/
+UserSettings/
+unity/com.chimera.splatpack/*.meta
+unity/com.chimera.splatpack/**/*.meta

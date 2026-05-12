@@ -83,6 +83,17 @@ Splat Material:
 
 If no material is assigned, `SplatPackRenderer` tries `Shader.Find`.
 
+Faster editor path:
+
+```text
+Select imported .splatpack asset
+  -> Tools
+  -> SplatPack
+  -> Create Viewer From Selection
+```
+
+This creates a configured `SplatPack Viewer` GameObject.
+
 ## 5. Expected Runtime Logs
 
 On load:

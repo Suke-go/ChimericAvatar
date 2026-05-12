@@ -46,6 +46,14 @@ namespace SplatPack.Runtime
         private float lastProjectionDispatchCpuMs;
         private int lastProjectionEyeCount;
 
+        public void Configure(SplatPackAsset packageAsset, ComputeShader projection, Material material, Camera camera = null)
+        {
+            asset = packageAsset;
+            projectionCompute = projection;
+            splatMaterial = material;
+            targetCamera = camera;
+        }
+
         private void OnEnable()
         {
             LoadPackage();
