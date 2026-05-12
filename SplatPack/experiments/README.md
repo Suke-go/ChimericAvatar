@@ -61,3 +61,14 @@ SplatPack/experiments/
 
 The first pass is not a performance paper yet. It verifies correctness and
 establishes the minimum benchmark harness.
+
+## Fetch Smoke Assets
+
+Use the smoke set first:
+
+```powershell
+SplatPack/experiments/fetch-samples.ps1 -Set Smoke -Compile
+```
+
+This downloads a small PLY into `experiments/data/` and compiles it to
+`.splatpack`. The data directory is ignored by git.
