@@ -40,6 +40,7 @@ namespace SplatPack.Runtime
 
         [Header("Quality")]
         [SerializeField] private float opacityScale = 1f;
+        [SerializeField] private float opacityPower = 1.25f;
         [SerializeField] private float splatScale = 0.9f;
         [SerializeField] private float alphaClip = 0.002f;
         [SerializeField] private float minScreenRadiusPixels = 0.75f;
@@ -52,7 +53,13 @@ namespace SplatPack.Runtime
         [SerializeField] private SplatPackSortMode sortMode = SplatPackSortMode.GpuDepthBucket;
         [SerializeField] private int sortIntervalFrames = 1;
         [SerializeField] private int xrSortIntervalFrames = 2;
-        [SerializeField] private int depthSortBinCount = 4096;
+        [SerializeField] private int depthSortBinCount = 8192;
+        [SerializeField] private bool skipStableSortFrames = true;
+
+        [Header("Temporal Cache")]
+        [SerializeField] private bool reuseStableProjectionCache = true;
+        [SerializeField] private float cacheTranslationThresholdMeters = 0.001f;
+        [SerializeField] private float cacheRotationThresholdDegrees = 0.05f;
 
         [Header("Diagnostics")]
         [SerializeField] private bool logDiagnostics = true;
@@ -77,15 +84,33 @@ namespace SplatPack.Runtime
         private float nextDiagnosticLogTime;
         private float lastProjectionDispatchCpuMs;
         private int lastProjectionEyeCount;
+        private string lastProjectionPath = "not-run";
         private uint[] drawOrderCpu;
         private ChunkSortItem[] chunkSortItems;
         private SplatSortItem[] splatSortItems;
         private int lastDrawOrderSortFrame = -1;
         private float lastDrawOrderSortCpuMs;
         private string lastSortPath = "not-run";
+        private bool lastSortReused;
         private bool didRecenter;
         private bool warnedUnsupportedMaterial;
         private bool warnedGpuSortUnavailable;
+        private bool hasProjectionCacheState;
+        private Vector3 lastProjectionCameraPosition;
+        private Quaternion lastProjectionCameraRotation = Quaternion.identity;
+        private Matrix4x4 lastProjectionLocalToWorld = Matrix4x4.identity;
+        private int lastProjectionWidth;
+        private int lastProjectionHeight;
+        private bool lastProjectionStereo;
+        private float lastProjectionOpacityPower;
+        private float lastProjectionSplatScale;
+        private float lastProjectionMinRadius;
+        private float lastProjectionMaxRadius;
+        private float lastProjectionKernel2DSize;
+        private bool hasSortCameraState;
+        private Vector3 lastSortCameraPosition;
+        private Quaternion lastSortCameraRotation = Quaternion.identity;
+        private Matrix4x4 lastSortLocalToWorld = Matrix4x4.identity;
 
         private struct ChunkSortItem
         {
@@ -350,6 +375,13 @@ namespace SplatPack.Runtime
             }
 
             int frame = Time.frameCount;
+            if (skipStableSortFrames && hasSortCameraState && IsCachedCameraStateStable(camera, lastSortCameraPosition, lastSortCameraRotation, lastSortLocalToWorld))
+            {
+                lastSortReused = true;
+                lastDrawOrderSortCpuMs = 0f;
+                return;
+            }
+
             int interval = ResolveSortIntervalFrames(camera);
             if (lastDrawOrderSortFrame >= 0 && frame - lastDrawOrderSortFrame < interval)
             {
@@ -394,6 +426,8 @@ namespace SplatPack.Runtime
             stopwatch.Stop();
             lastDrawOrderSortFrame = frame;
             lastDrawOrderSortCpuMs = (float)stopwatch.Elapsed.TotalMilliseconds;
+            lastSortReused = false;
+            RememberSortCameraState(camera);
         }
 
         private bool TryUpdateGpuDepthBucketOrder(Camera camera)
@@ -485,7 +519,7 @@ namespace SplatPack.Runtime
                 }
             }
 
-            int requestedBinCount = Mathf.Clamp(depthSortBinCount, 256, 8192);
+            int requestedBinCount = Mathf.Clamp(depthSortBinCount, 256, 16384);
             if (sortBinCountBuffer != null && allocatedSortBinCount == requestedBinCount)
             {
                 return true;
@@ -619,6 +653,13 @@ namespace SplatPack.Runtime
             int width;
             int height;
             ResolveProjectionViewport(camera, out width, out height);
+            if (CanReuseProjectedSplats(camera, width, height))
+            {
+                lastProjectionPath = "cache";
+                lastProjectionDispatchCpuMs = 0f;
+                return Mathf.Max(1, lastProjectionEyeCount);
+            }
+
             int groups = Mathf.CeilToInt(package.SplatCount / (float)ProjectionThreadGroupSize);
 
             projectionCompute.SetBuffer(projectionKernel, "_Splats", splatBuffer);
@@ -626,6 +667,7 @@ namespace SplatPack.Runtime
             projectionCompute.SetInt("_SplatCount", package.SplatCount);
             projectionCompute.SetFloat("_SplatScale", ResolveSplatScale());
             projectionCompute.SetFloat("_OpacityScale", ResolveOpacityScale());
+            projectionCompute.SetFloat("_OpacityPower", ResolveOpacityPower());
             projectionCompute.SetFloat("_MinScreenRadiusPixels", Mathf.Max(0f, minScreenRadiusPixels));
             projectionCompute.SetFloat("_MaxScreenRadiusPixels", ResolveMaxScreenRadiusPixels());
             projectionCompute.SetFloat("_Kernel2DSize", Mathf.Max(0f, kernel2DSize));
@@ -639,6 +681,8 @@ namespace SplatPack.Runtime
                 stopwatch.Stop();
                 lastProjectionDispatchCpuMs = (float)stopwatch.Elapsed.TotalMilliseconds;
                 lastProjectionEyeCount = 2;
+                lastProjectionPath = "dispatch";
+                RememberProjectionCacheState(camera, width, height, true);
                 return 2;
             }
 
@@ -648,6 +692,8 @@ namespace SplatPack.Runtime
             stopwatch.Stop();
             lastProjectionDispatchCpuMs = (float)stopwatch.Elapsed.TotalMilliseconds;
             lastProjectionEyeCount = 1;
+            lastProjectionPath = "dispatch";
+            RememberProjectionCacheState(camera, width, height, false);
             return 1;
         }
 
@@ -673,6 +719,11 @@ namespace SplatPack.Runtime
         {
             float value = Mathf.Max(0f, opacityScale);
             return enforceStandaloneRadiusCap ? Mathf.Min(value, StandaloneSafeOpacityScale) : value;
+        }
+
+        private float ResolveOpacityPower()
+        {
+            return Mathf.Max(0.01f, opacityPower);
         }
 
         private float ResolveSplatScale()
@@ -753,6 +804,8 @@ namespace SplatPack.Runtime
             transform.position = viewCamera.transform.position + forward * distance - package.Bounds.center;
             transform.rotation = Quaternion.identity;
             didRecenter = true;
+            ResetProjectionCacheState();
+            hasSortCameraState = false;
 
             Debug.Log(
                 "[SplatPack] Recentered sample in front of camera: "
@@ -825,9 +878,9 @@ namespace SplatPack.Runtime
                 + $"stereoEye={stereoEye}, xrEnabled={XRSettings.enabled}, xrActive={XRSettings.isDeviceActive}, "
                 + $"eye={XRSettings.eyeTextureWidth}x{XRSettings.eyeTextureHeight}, "
                 + $"rendererPosition={transform.position}, "
-                + $"projection={lastProjectionDispatchCpuMs:0.###}ms-cpu/{Mathf.Max(1, lastProjectionEyeCount)}eye, "
+                + $"projection={lastProjectionPath}/{lastProjectionDispatchCpuMs:0.###}ms-cpu/{Mathf.Max(1, lastProjectionEyeCount)}eye, "
                 + $"sort={BuildSortDiagnostics()}, "
-                + $"quality=opacity/{ResolveOpacityScale():0.###},scale/{ResolveSplatScale():0.###},maxR/{ResolveMaxScreenRadiusPixels():0.###},clip/{ResolveAlphaClip():0.####}, "
+                + $"quality=opacity/{ResolveOpacityScale():0.###},opPow/{ResolveOpacityPower():0.###},scale/{ResolveSplatScale():0.###},maxR/{ResolveMaxScreenRadiusPixels():0.###},clip/{ResolveAlphaClip():0.####}, "
                 + BuildProjectionDiagnostics(camera)
                 + $"splats={package.SplatCount}, chunks={package.ChunkCount}, "
                 + $"vertices={package.SplatCount * 6 * ResolveProceduralDrawInstanceCount(camera)}.");
@@ -837,7 +890,7 @@ namespace SplatPack.Runtime
         {
             return sortMode == SplatPackSortMode.None
                 ? "off"
-                : $"{lastSortPath}/{lastDrawOrderSortCpuMs:0.###}ms-cpu";
+                : $"{lastSortPath}{(lastSortReused ? "/cache" : string.Empty)}/{lastDrawOrderSortCpuMs:0.###}ms-cpu";
         }
 
         private string BuildProjectionDiagnostics(Camera camera)
@@ -916,6 +969,7 @@ namespace SplatPack.Runtime
             drawOrderCpu = null;
             chunkSortItems = null;
             splatSortItems = null;
+            ResetProjectionCacheState();
         }
 
         private void ReleaseSortBuffers()
@@ -935,7 +989,106 @@ namespace SplatPack.Runtime
             sortPrefixKernel = -1;
             sortFillKernel = -1;
             lastSortPath = "not-run";
+            lastSortReused = false;
             warnedGpuSortUnavailable = false;
+            hasSortCameraState = false;
+        }
+
+        private bool CanReuseProjectedSplats(Camera camera, int width, int height)
+        {
+            if (!reuseStableProjectionCache || !hasProjectionCacheState || camera == null)
+            {
+                return false;
+            }
+
+            if (width != lastProjectionWidth || height != lastProjectionHeight || camera.stereoEnabled != lastProjectionStereo)
+            {
+                return false;
+            }
+
+            if (!IsCachedCameraStateStable(camera, lastProjectionCameraPosition, lastProjectionCameraRotation, lastProjectionLocalToWorld))
+            {
+                return false;
+            }
+
+            return Mathf.Approximately(lastProjectionOpacityPower, ResolveOpacityPower())
+                   && Mathf.Approximately(lastProjectionSplatScale, ResolveSplatScale())
+                   && Mathf.Approximately(lastProjectionMinRadius, Mathf.Max(0f, minScreenRadiusPixels))
+                   && Mathf.Approximately(lastProjectionMaxRadius, ResolveMaxScreenRadiusPixels())
+                   && Mathf.Approximately(lastProjectionKernel2DSize, Mathf.Max(0f, kernel2DSize));
+        }
+
+        private void RememberProjectionCacheState(Camera camera, int width, int height, bool stereo)
+        {
+            if (camera == null)
+            {
+                ResetProjectionCacheState();
+                return;
+            }
+
+            hasProjectionCacheState = true;
+            lastProjectionCameraPosition = camera.transform.position;
+            lastProjectionCameraRotation = camera.transform.rotation;
+            lastProjectionLocalToWorld = transform.localToWorldMatrix;
+            lastProjectionWidth = width;
+            lastProjectionHeight = height;
+            lastProjectionStereo = stereo;
+            lastProjectionOpacityPower = ResolveOpacityPower();
+            lastProjectionSplatScale = ResolveSplatScale();
+            lastProjectionMinRadius = Mathf.Max(0f, minScreenRadiusPixels);
+            lastProjectionMaxRadius = ResolveMaxScreenRadiusPixels();
+            lastProjectionKernel2DSize = Mathf.Max(0f, kernel2DSize);
+        }
+
+        private void ResetProjectionCacheState()
+        {
+            hasProjectionCacheState = false;
+            lastProjectionPath = "not-run";
+        }
+
+        private void RememberSortCameraState(Camera camera)
+        {
+            if (camera == null)
+            {
+                hasSortCameraState = false;
+                return;
+            }
+
+            hasSortCameraState = true;
+            lastSortCameraPosition = camera.transform.position;
+            lastSortCameraRotation = camera.transform.rotation;
+            lastSortLocalToWorld = transform.localToWorldMatrix;
+        }
+
+        private bool IsCachedCameraStateStable(
+            Camera camera,
+            Vector3 cachedPosition,
+            Quaternion cachedRotation,
+            Matrix4x4 cachedLocalToWorld)
+        {
+            if (camera == null)
+            {
+                return false;
+            }
+
+            float translationThreshold = Mathf.Max(0f, cacheTranslationThresholdMeters);
+            float rotationThreshold = Mathf.Max(0f, cacheRotationThresholdDegrees);
+            return Vector3.SqrMagnitude(camera.transform.position - cachedPosition) <= translationThreshold * translationThreshold
+                   && Quaternion.Angle(camera.transform.rotation, cachedRotation) <= rotationThreshold
+                   && MatrixApproximately(transform.localToWorldMatrix, cachedLocalToWorld, 1e-5f);
+        }
+
+        private static bool MatrixApproximately(Matrix4x4 a, Matrix4x4 b, float epsilon)
+        {
+            for (int i = 0; i < 16; i++)
+            {
+                if (Mathf.Abs(a[i] - b[i]) > epsilon)
+                {
+                    return false;
+                }
+            }
+
+            return true;
         }
     }
 }

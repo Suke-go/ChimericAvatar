@@ -33,6 +33,7 @@ float3 _CameraWorldPosition;
 float4 _ViewportSize;
 float _SplatScale;
 float _OpacityScale;
+float _OpacityPower;
 float _MinScreenRadiusPixels;
 float _MaxScreenRadiusPixels;
 float _Kernel2DSize;
@@ -140,7 +141,8 @@ void ProjectSplats(uint3 id : SV_DispatchThreadID)
     projected.clipCenter = clipCenter;
     projected.axis0Ndc = float4(axis0Ndc, 0.0, 0.0);
     projected.axis1Ndc = float4(axis1Ndc, 0.0, 0.0);
-    projected.color = float4(saturate(splat.color.rgb), saturate(splat.color.a));
+    float alpha = pow(saturate(splat.color.a), max(0.01, _OpacityPower));
+    projected.color = float4(saturate(splat.color.rgb), alpha);
     projected.meta = float4(clipCenter.z / clipCenter.w, max(radius0Pixels, radius1Pixels), 1.0, 0.0);
     _ProjectedSplats[projectedIndex] = projected;
 }
