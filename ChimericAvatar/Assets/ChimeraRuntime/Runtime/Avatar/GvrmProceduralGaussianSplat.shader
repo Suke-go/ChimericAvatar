@@ -249,7 +249,7 @@ Shader "Chimera/GVRM Procedural Gaussian Splat"
                     uint projectedEyeCount = (uint)max(1, _ProjectedSplatCacheEyeCount);
                     uint projectedEyeStride = (uint)max(0, _ProjectedSplatCacheEyeStride);
                     uint projectedEyeIndex = 0;
-                    #if defined(UNITY_SINGLE_PASS_STEREO)
+                    #if defined(UNITY_SINGLE_PASS_STEREO) || defined(UNITY_STEREO_INSTANCING_ENABLED) || defined(UNITY_STEREO_MULTIVIEW_ENABLED)
                     projectedEyeIndex = min((uint)unity_StereoEyeIndex, projectedEyeCount - 1);
                     #endif
 
