@@ -2103,13 +2103,14 @@ namespace Chimera.Runtime
                 }
                 else
                 {
+                    var instanceCount = ResolveProceduralDrawInstanceCount(camera);
                     command.DrawProcedural(
                         Matrix4x4.identity,
                         material,
                         0,
                         MeshTopology.Triangles,
                         RenderedSplatCount * 6,
-                        1,
+                        instanceCount,
                         propertyBlock);
                 }
 
@@ -2150,12 +2151,13 @@ namespace Chimera.Runtime
             }
 
             var vertexCount = RenderedSplatCount * 6;
+            var instanceCount = ResolveProceduralDrawInstanceCount(camera);
             Graphics.DrawProcedural(
                 material,
                 drawBounds,
                 MeshTopology.Triangles,
                 vertexCount,
-                1,
+                instanceCount,
                 null,
                 propertyBlock,
                 ShadowCastingMode.Off,
@@ -2163,6 +2165,11 @@ namespace Chimera.Runtime
                 gameObject.layer);
             RememberDraw(camera, false, "camera-post");
 #pragma warning restore 0618
+        }
+
+        private static int ResolveProceduralDrawInstanceCount(Camera camera)
+        {
+            return IsSinglePassStereoCamera(camera) ? 2 : 1;
         }
 
         private void RememberDraw(Camera camera, bool useIndirectVisibleDraw, string phase)
@@ -2175,6 +2182,7 @@ namespace Chimera.Runtime
             lastDrawSkipReason = "none";
 
             var stereoEye = camera != null ? camera.stereoActiveEye.ToString() : "None";
+            var instanceCount = ResolveProceduralDrawInstanceCount(camera);
             var signature = $"{lastDrawPath}|{lastDrawCameraName}|{camera?.cameraType}|xr:{isStereoOrXrDraw}|eye:{stereoEye}";
             if (!loggedFirstDraw
                 || signature != lastLoggedDrawSignature
@@ -2187,11 +2195,11 @@ namespace Chimera.Runtime
                     "[Chimera GVRM] Procedural splat draw submitted: "
                     + $"path={lastDrawPath}, camera={lastDrawCameraName}, "
                     + $"cameraType={camera?.cameraType}, stereo={camera != null && camera.stereoEnabled}, "
-                    + $"stereoEye={stereoEye}, "
+                    + $"stereoEye={stereoEye}, instances={instanceCount}, "
                     + $"xrActive={IsXrRenderingActive()}, stereoOrXrDraw={isStereoOrXrDraw}, platform={Application.platform}, "
                     + $"graphics={SystemInfo.graphicsDeviceType}, runtimePath={runtimePath}, "
                     + $"projection={ProjectionDiagnostics}, "
-                    + $"splats={RenderedSplatCount}, vertices={RenderedSplatCount * 6}.");
+                    + $"splats={RenderedSplatCount}, vertices={RenderedSplatCount * 6 * instanceCount}.");
             }
         }
 
