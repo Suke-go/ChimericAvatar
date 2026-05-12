@@ -118,6 +118,8 @@ route views; the projected cache stores per-eye data.
 
 ## 6. Minimum Experiment Matrix
 
+See `external-baselines.md` for candidate repositories and clone priorities.
+
 Use the same `.ply`, headset, Unity quality settings, and render resolution for
 all rows.
 

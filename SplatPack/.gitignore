@@ -1,2 +1,5 @@
 compiler/bin/
 compiler/obj/
+experiments/external/
+experiments/data/
+experiments/results/

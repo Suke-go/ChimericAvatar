@@ -41,7 +41,8 @@ specs/
 4. Validate on XREAL/OpenXR and then standalone HMD.
 
 See `specs/verification-plan.md` for the current validation steps and
-experiment matrix.
+experiment matrix. See `specs/external-baselines.md` for optional external
+baseline repositories.
 
 ## Non-goals For The First Pass
 
