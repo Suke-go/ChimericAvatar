@@ -124,7 +124,6 @@ Shader "Chimera/GVRM Procedural Gaussian Splat"
             {
                 uint vertexID : SV_VertexID;
                 uint instanceID : SV_InstanceID;
-                UNITY_VERTEX_INPUT_INSTANCE_ID
             };
 
             static const float kGaussianExtent = 2.8284271247461903;
@@ -150,6 +149,15 @@ Shader "Chimera/GVRM Procedural Gaussian Splat"
                 if (vertexID == 3) return float2(-1.0, -1.0);
                 if (vertexID == 4) return float2( 1.0,  1.0);
                 return float2(-1.0,  1.0);
+            }
+
+            uint ProceduralDrawIndex(uint rawInstanceID)
+            {
+                #if UNITY_ANY_INSTANCING_ENABLED
+                return unity_InstanceID;
+                #else
+                return rawInstanceID;
+                #endif
             }
 
             void SolveEigen2(float c00, float c01, float c11, out float lambda0, out float lambda1, out float2 dir0)
@@ -226,7 +234,7 @@ Shader "Chimera/GVRM Procedural Gaussian Splat"
                 uint cornerIndex;
                 if (_UseProceduralInstances > 0.5)
                 {
-                    drawIndex = input.instanceID;
+                    drawIndex = ProceduralDrawIndex(input.instanceID);
                     cornerIndex = input.vertexID % 6;
                 }
                 else
