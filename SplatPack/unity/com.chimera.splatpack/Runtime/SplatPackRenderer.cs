@@ -1,4 +1,5 @@
 using System;
+using Diagnostics = System.Diagnostics;
 using UnityEngine;
 using UnityEngine.Rendering;
 using UnityEngine.XR;
@@ -29,6 +30,10 @@ namespace SplatPack.Runtime
         [SerializeField] private float kernel2DSize = 0.3f;
         [SerializeField] private float eigenTermFloor = 0.1f;
 
+        [Header("Diagnostics")]
+        [SerializeField] private bool logDiagnostics = true;
+        [SerializeField] private float diagnosticIntervalSeconds = 5f;
+
         private SplatPackPackage package;
         private ComputeBuffer splatBuffer;
         private ComputeBuffer drawOrderBuffer;
@@ -36,6 +41,10 @@ namespace SplatPack.Runtime
         private MaterialPropertyBlock propertyBlock;
         private int projectionKernel = -1;
         private bool subscribed;
+        private bool loggedFirstDiagnostics;
+        private float nextDiagnosticLogTime;
+        private float lastProjectionDispatchCpuMs;
+        private int lastProjectionEyeCount;
 
         private void OnEnable()
         {
@@ -179,6 +188,8 @@ namespace SplatPack.Runtime
             {
                 command.Release();
             }
+
+            MaybeLogDiagnostics(camera, "srp-end");
         }
 
         private void Draw(Camera camera)
@@ -202,6 +213,7 @@ namespace SplatPack.Runtime
                 false,
                 gameObject.layer);
 #pragma warning restore 0618
+            MaybeLogDiagnostics(camera, "camera-post");
         }
 
         private bool TryPrepare(Camera camera, Material material)
@@ -227,6 +239,7 @@ namespace SplatPack.Runtime
 
         private int DispatchProjectedSplats(Camera camera)
         {
+            Diagnostics.Stopwatch stopwatch = Diagnostics.Stopwatch.StartNew();
             int width;
             int height;
             ResolveProjectionViewport(camera, out width, out height);
@@ -246,12 +259,18 @@ namespace SplatPack.Runtime
             {
                 DispatchEye(camera, Camera.StereoscopicEye.Left, 0, width, height, groups);
                 DispatchEye(camera, Camera.StereoscopicEye.Right, package.SplatCount, width, height, groups);
+                stopwatch.Stop();
+                lastProjectionDispatchCpuMs = (float)stopwatch.Elapsed.TotalMilliseconds;
+                lastProjectionEyeCount = 2;
                 return 2;
             }
 
             Matrix4x4 worldToView = camera != null ? camera.worldToCameraMatrix : Matrix4x4.identity;
             Matrix4x4 projection = camera != null ? camera.projectionMatrix : Matrix4x4.identity;
             DispatchProjection(worldToView, GL.GetGPUProjectionMatrix(projection, false), 0, width, height, groups);
+            stopwatch.Stop();
+            lastProjectionDispatchCpuMs = (float)stopwatch.Elapsed.TotalMilliseconds;
+            lastProjectionEyeCount = 1;
             return 1;
         }
 
@@ -305,6 +324,32 @@ namespace SplatPack.Runtime
                 width = Mathf.Max(1, XRSettings.eyeTextureWidth);
                 height = Mathf.Max(1, XRSettings.eyeTextureHeight);
             }
+        }
+
+        private void MaybeLogDiagnostics(Camera camera, string phase)
+        {
+            if (!logDiagnostics || package == null)
+            {
+                return;
+            }
+
+            float now = Time.unscaledTime;
+            if (loggedFirstDiagnostics && now < nextDiagnosticLogTime)
+            {
+                return;
+            }
+
+            loggedFirstDiagnostics = true;
+            nextDiagnosticLogTime = now + Mathf.Max(0.5f, diagnosticIntervalSeconds);
+            string stereoEye = camera != null ? camera.stereoActiveEye.ToString() : "None";
+            Debug.Log(
+                "[SplatPack] Draw submitted: "
+                + $"phase={phase}, camera={camera?.name ?? "none"}, "
+                + $"cameraType={camera?.cameraType}, stereo={camera != null && camera.stereoEnabled}, "
+                + $"stereoEye={stereoEye}, xrEnabled={XRSettings.enabled}, xrActive={XRSettings.isDeviceActive}, "
+                + $"eye={XRSettings.eyeTextureWidth}x{XRSettings.eyeTextureHeight}, "
+                + $"projection={lastProjectionDispatchCpuMs:0.###}ms-cpu/{Mathf.Max(1, lastProjectionEyeCount)}eye, "
+                + $"splats={package.SplatCount}, chunks={package.ChunkCount}, vertices={package.SplatCount * 6}.");
         }
 
         private void ReleaseBuffers()

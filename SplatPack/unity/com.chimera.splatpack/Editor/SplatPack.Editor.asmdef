@@ -2,8 +2,7 @@
   "name": "SplatPack.Editor",
   "rootNamespace": "SplatPack.Editor",
   "references": [
-    "SplatPack.Runtime",
-    "UnityEditor.AssetImporters"
+    "SplatPack.Runtime"
   ],
   "includePlatforms": [
     "Editor"

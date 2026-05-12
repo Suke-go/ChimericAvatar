@@ -40,6 +40,9 @@ specs/
 3. Render with a projected splat cache and lightweight quad expansion.
 4. Validate on XREAL/OpenXR and then standalone HMD.
 
+See `specs/verification-plan.md` for the current validation steps and
+experiment matrix.
+
 ## Non-goals For The First Pass
 
 - No VRM body loading.
