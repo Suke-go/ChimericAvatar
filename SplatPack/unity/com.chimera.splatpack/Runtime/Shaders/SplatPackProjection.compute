@@ -37,6 +37,7 @@ float _OpacityPower;
 float _MinScreenRadiusPixels;
 float _MaxScreenRadiusPixels;
 float _MaxScreenEccentricity;
+float _EccentricityOpacityPower;
 float _Kernel2DSize;
 float _EigenTermFloor;
 
@@ -133,10 +134,17 @@ void ProjectSplats(uint3 id : SV_DispatchThreadID)
 
     float2 dir1 = float2(dir0.y, -dir0.x);
     float maxRadiusPixels = max(_MinScreenRadiusPixels, _MaxScreenRadiusPixels);
-    float radius0Pixels = clamp(_SplatScale * kGaussianExtent * sqrt(lambda0), _MinScreenRadiusPixels, maxRadiusPixels);
-    float radius1Pixels = clamp(_SplatScale * kGaussianExtent * sqrt(lambda1), _MinScreenRadiusPixels, maxRadiusPixels);
+    float rawRadius0Pixels = _SplatScale * kGaussianExtent * sqrt(lambda0);
+    float rawRadius1Pixels = _SplatScale * kGaussianExtent * sqrt(lambda1);
+    float rawMajorPixels = max(rawRadius0Pixels, rawRadius1Pixels);
+    float rawMinorPixels = max(1e-4, min(rawRadius0Pixels, rawRadius1Pixels));
+    float radiusClampFade = saturate(maxRadiusPixels / max(maxRadiusPixels, rawMajorPixels));
+    float radius0Pixels = clamp(rawRadius0Pixels, _MinScreenRadiusPixels, maxRadiusPixels);
+    float radius1Pixels = clamp(rawRadius1Pixels, _MinScreenRadiusPixels, maxRadiusPixels);
     float originalArea = max(1e-4, radius0Pixels * radius1Pixels);
     float maxEccentricity = max(1.0, _MaxScreenEccentricity);
+    float rawEccentricity = max(1.0, rawMajorPixels / rawMinorPixels);
+    float eccentricityFade = pow(saturate(maxEccentricity / rawEccentricity), max(0.0, _EccentricityOpacityPower));
     if (radius0Pixels > radius1Pixels * maxEccentricity)
     {
         radius1Pixels = min(maxRadiusPixels, max(radius1Pixels, radius0Pixels / maxEccentricity));
@@ -151,7 +159,7 @@ void ProjectSplats(uint3 id : SV_DispatchThreadID)
     projected.clipCenter = clipCenter;
     projected.axis0Ndc = float4(axis0Ndc, 0.0, 0.0);
     projected.axis1Ndc = float4(axis1Ndc, 0.0, 0.0);
-    float alpha = pow(saturate(splat.color.a), max(0.01, _OpacityPower)) * areaScale;
+    float alpha = pow(saturate(splat.color.a), max(0.01, _OpacityPower)) * areaScale * radiusClampFade * eccentricityFade;
     projected.color = float4(saturate(splat.color.rgb), alpha);
     projected.meta = float4(clipCenter.z / clipCenter.w, max(radius0Pixels, radius1Pixels), 1.0, 0.0);
     _ProjectedSplats[projectedIndex] = projected;

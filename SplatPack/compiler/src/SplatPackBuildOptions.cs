@@ -23,5 +23,6 @@ public sealed class SplatPackBuildOptions
     public float MaxAxisLength { get; init; }
     public float MaxAxisLengthPercentile { get; init; } = 99f;
     public float MaxAxisLengthMultiplier { get; init; } = 1.1f;
+    public float MaxAxisRatio { get; init; } = 8f;
     public float ContributionAxisPower { get; init; } = 0.5f;
 }

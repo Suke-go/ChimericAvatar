@@ -20,6 +20,7 @@ chunk metadata, but already applies compiler-side safety passes:
 - prunes near-zero opacity splats
 - keeps the highest-contribution splats under a standalone XR splat budget
 - caps extreme Gaussian axis lengths using a percentile budget
+- caps needle-like Gaussian axis ratios before runtime projection
 - writes a JSON build report next to the package
 
 Use `--target reference` when you need an unpruned reference package.
@@ -33,6 +34,7 @@ dotnet run --project SplatPack/compiler -- input.ply output.splatpack `
   --opacity-prune 0.002 `
   --max-axis-percentile 99 `
   --max-axis-multiplier 1.1 `
+  --max-axis-ratio 8 `
   --contribution-axis-power 0.5
 ```
 

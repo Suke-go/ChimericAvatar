@@ -15,8 +15,10 @@ public sealed class SplatPackBuildReport
     public required SplatPackBuildReportBounds Bounds { get; init; }
     public required SplatPackScalarStats RawOpacity { get; init; }
     public required SplatPackScalarStats RawMaxAxisLength { get; init; }
+    public required SplatPackScalarStats RawAxisRatio { get; init; }
     public required SplatPackScalarStats EmittedOpacity { get; init; }
     public required SplatPackScalarStats EmittedMaxAxisLength { get; init; }
+    public required SplatPackScalarStats EmittedAxisRatio { get; init; }
     public required SplatPackChunkStats Chunks { get; init; }
     public required SplatPackMemoryStats Memory { get; init; }
 }
@@ -29,6 +31,7 @@ public sealed class SplatPackBuildReportOptions
     public required float AxisLengthCap { get; init; }
     public required float MaxAxisLengthPercentile { get; init; }
     public required float MaxAxisLengthMultiplier { get; init; }
+    public required float MaxAxisRatio { get; init; }
     public required float ContributionAxisPower { get; init; }
 }
 
@@ -40,6 +43,7 @@ public sealed class SplatPackBuildReportCounts
     public required int PrunedLowOpacitySplats { get; init; }
     public required int PrunedBudgetSplats { get; init; }
     public required int AxisClampedSplats { get; init; }
+    public required int AxisRatioClampedSplats { get; init; }
 }
 
 public sealed class SplatPackBuildReportBounds
