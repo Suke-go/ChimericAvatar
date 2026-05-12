@@ -36,13 +36,24 @@ This keeps the patch reversible and isolates the first risk to view-dependent pr
 
 The shader still computes Gaussian falloff per fragment.
 
+## XR Stereo Cache Layout
+
+The projected cache buffer is allocated with two eye slots:
+
+```text
+ProjectedSplatBuffer[0 * splatCount + splatId] = left/mono projection
+ProjectedSplatBuffer[1 * splatCount + splatId] = right projection
+```
+
+Mono and Multi Pass rendering populate slot 0 for the current camera/eye. Single Pass stereo populates both slots before the draw and the shader selects the slot with `unity_StereoEyeIndex`.
+
 ## Diagnostics
 
 Renderer diagnostics include:
 
 - `path=<runtimePath>`
 - `skinning=gpu-vertex-cache/<vertexCount>`
-- `projection=gpu-cache/<dispatchCpuMs>ms-cpu` or `projection=vertex-shader`
+- `projection=gpu-cache/<dispatchCpuMs>ms-cpu/<eyeCount>eye` or `projection=vertex-shader`
 - splat count and draw vertex count
 
 The current projection timing is CPU dispatch/enqueue time, not GPU timestamp timing. Real GPU timing should be added before reporting paper numbers.
@@ -60,6 +71,6 @@ For paper-quality validation, compare:
 Required checks:
 
 - visual parity between reference projection and projected-cache projection
-- left/right eye agreement in Multi Pass XR
+- left/right eye agreement in Multi Pass and Single Pass XR
 - no fallback warnings from `GvrmProceduralSplatProjection`
 - GPU timestamp timing before final quantitative claims

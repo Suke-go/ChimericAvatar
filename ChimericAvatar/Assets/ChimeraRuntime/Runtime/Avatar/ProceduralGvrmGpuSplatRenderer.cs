@@ -26,6 +26,7 @@ namespace Chimera.Runtime
         private const int BoneMatrixStride = 16 * sizeof(float);
         private const int SkinningThreadGroupSize = 64;
         private const int ProjectionThreadGroupSize = 64;
+        private const int ProjectedSplatCacheMaxEyeCount = 2;
         private const int SortThreadGroupSize = 64;
         private const int CullingThreadGroupSize = 128;
         private const int IndirectArgsCount = 4;
@@ -163,7 +164,6 @@ namespace Chimera.Runtime
         private int allocatedSortBinCount;
         private int allocatedCullBlockCount;
         private bool warnedMissingMaterial;
-        private bool warnedProjectedCacheSinglePassStereo;
         private bool loggedFirstDraw;
         private int lastDrawFrame = -1;
         private string lastDrawCameraName = "none";
@@ -172,6 +172,7 @@ namespace Chimera.Runtime
         private string lastLoggedDrawSignature = string.Empty;
         private float nextDrawDiagnosticLogTime;
         private bool lastProjectedSplatCacheUsed;
+        private int lastProjectedSplatCacheEyeCount;
         private float lastProjectionDispatchCpuMs;
 
         public string BackendName => "Procedural GVRM GPU Splat";
@@ -187,12 +188,17 @@ namespace Chimera.Runtime
         public string RuntimeDiagnostics =>
             $"path={runtimePath}, splats={RenderedSplatCount}, sh={activeSphericalHarmonicsDegree}, " +
             $"skinning={(HasSkinning ? (UseGpuSkinning ? $"gpu-vertex-cache/{meshPositions.Length}" : "cpu") : "off")}, " +
-            $"projection={(lastProjectedSplatCacheUsed ? $"gpu-cache/{lastProjectionDispatchCpuMs:0.###}ms-cpu" : "vertex-shader")}, " +
+            $"projection={ProjectionDiagnostics}, " +
             $"sort={(UseGpuDepthBucketSort ? $"gpu-bucket/{allocatedSortBinCount}" : "cpu")}, " +
             $"sortEvery={EffectiveSortEveryNthFrame}, xrPerf={(UseXrPerformanceBudget ? "on" : "off")}, " +
             $"cull={(UseGpuVisibleCulling ? $"gpu-indirect/{allocatedCullBlockCount}" : "off")}, " +
             $"draw={(ShouldUseIndirectVisibleDraw() ? "indirect-visible" : IsXrRenderingActive() ? "full-xr-safe" : "full")}, " +
             $"lastDraw={lastDrawPath}@{lastDrawCameraName}/f{lastDrawFrame}, skip={lastDrawSkipReason}";
+
+        private string ProjectionDiagnostics =>
+            lastProjectedSplatCacheUsed
+                ? $"gpu-cache/{lastProjectionDispatchCpuMs:0.###}ms-cpu/{Mathf.Max(1, lastProjectedSplatCacheEyeCount)}eye"
+                : "vertex-shader";
 
         public static bool IsSupportedOnCurrentDevice(out string reason)
         {
@@ -2161,7 +2167,7 @@ namespace Chimera.Runtime
                     + $"stereoEye={stereoEye}, "
                     + $"xrActive={IsXrRenderingActive()}, platform={Application.platform}, "
                     + $"graphics={SystemInfo.graphicsDeviceType}, runtimePath={runtimePath}, "
-                    + $"projection={(lastProjectedSplatCacheUsed ? $"gpu-cache/{lastProjectionDispatchCpuMs:0.###}ms-cpu" : "vertex-shader")}, "
+                    + $"projection={ProjectionDiagnostics}, "
                     + $"splats={RenderedSplatCount}, vertices={RenderedSplatCount * 6}.");
             }
         }
@@ -2233,6 +2239,8 @@ namespace Chimera.Runtime
             }
             lastProjectedSplatCacheUsed = TryProjectSplatsGpu(camera);
             propertyBlock.SetFloat("_UseProjectedSplatCache", lastProjectedSplatCacheUsed ? 1f : 0f);
+            propertyBlock.SetInt("_ProjectedSplatCacheEyeStride", RenderedSplatCount);
+            propertyBlock.SetInt("_ProjectedSplatCacheEyeCount", lastProjectedSplatCacheUsed ? Mathf.Max(1, lastProjectedSplatCacheEyeCount) : 1);
             if (lastProjectedSplatCacheUsed)
             {
                 propertyBlock.SetBuffer("_ProjectedSplats", projectedSplatBuffer);
@@ -2258,35 +2266,15 @@ namespace Chimera.Runtime
                 return false;
             }
 
-            if (IsSinglePassStereoCamera(camera))
-            {
-                if (!warnedProjectedCacheSinglePassStereo)
-                {
-                    warnedProjectedCacheSinglePassStereo = true;
-                    Debug.LogWarning(
-                        "[Chimera GVRM] Projected splat cache is disabled for Single Pass stereo "
-                        + $"(camera.stereoActiveEye={camera.stereoActiveEye}). The current cache is single-view; use Multi Pass "
-                        + "for exact per-eye projected caching, or stay on the reference vertex-shader path.");
-                }
-
-                return false;
-            }
-
             try
             {
                 var stopwatch = System.Diagnostics.Stopwatch.StartNew();
-                ResolveProjectionMatrices(camera, out var worldToView, out var gpuProjection);
-                var viewProjection = gpuProjection * worldToView;
-                var width = Mathf.Max(1, camera.pixelWidth);
-                var height = Mathf.Max(1, camera.pixelHeight);
+                ResolveProjectionViewport(camera, out var width, out var height);
+                var groups = Mathf.CeilToInt(RenderedSplatCount / (float)ProjectionThreadGroupSize);
+                var dispatchGroups = Mathf.Max(1, groups);
 
                 projectionComputeShader.SetInt("_SplatCount", RenderedSplatCount);
-                projectionComputeShader.SetMatrix("_WorldToView", worldToView);
-                projectionComputeShader.SetMatrix("_ProjectionMatrix", gpuProjection);
-                projectionComputeShader.SetMatrix("_ViewProjection", viewProjection);
                 projectionComputeShader.SetMatrix("_WorldToGsLocal", BuildWorldToGsLocalMatrix());
-                projectionComputeShader.SetVector("_CameraWorldPosition", camera.transform.position);
-                projectionComputeShader.SetVector("_ViewportSize", new Vector4(width, height, 1f / width, 1f / height));
                 projectionComputeShader.SetFloat("_SplatScale", Mathf.Max(0f, splatScale * (budget.SplatScale > 0f ? budget.SplatScale : 1f)));
                 projectionComputeShader.SetFloat("_OpacityScale", opacityScale);
                 projectionComputeShader.SetFloat("_MinScreenRadiusPixels", Mathf.Max(0f, minScreenRadiusPixels));
@@ -2310,8 +2298,21 @@ namespace Chimera.Runtime
                     sphericalHarmonicsBuffer != null ? sphericalHarmonicsBuffer : projectionDummySphericalHarmonicsBuffer);
                 projectionComputeShader.SetBuffer(projectionKernel, "_ProjectedSplats", projectedSplatBuffer);
 
-                var groups = Mathf.CeilToInt(RenderedSplatCount / (float)ProjectionThreadGroupSize);
-                projectionComputeShader.Dispatch(projectionKernel, Mathf.Max(1, groups), 1, 1);
+                if (IsSinglePassStereoCamera(camera))
+                {
+                    ResolveStereoProjectionMatrices(camera, Camera.StereoscopicEye.Left, out var leftWorldToView, out var leftProjection);
+                    DispatchProjectedSplats(leftWorldToView, leftProjection, 0, width, height, dispatchGroups);
+                    ResolveStereoProjectionMatrices(camera, Camera.StereoscopicEye.Right, out var rightWorldToView, out var rightProjection);
+                    DispatchProjectedSplats(rightWorldToView, rightProjection, RenderedSplatCount, width, height, dispatchGroups);
+                    lastProjectedSplatCacheEyeCount = 2;
+                }
+                else
+                {
+                    ResolveProjectionMatrices(camera, out var worldToView, out var gpuProjection);
+                    DispatchProjectedSplats(worldToView, gpuProjection, 0, width, height, dispatchGroups);
+                    lastProjectedSplatCacheEyeCount = 1;
+                }
+
                 stopwatch.Stop();
                 lastProjectionDispatchCpuMs = (float)stopwatch.Elapsed.TotalMilliseconds;
                 return true;
@@ -2325,6 +2326,24 @@ namespace Chimera.Runtime
             }
         }
 
+        private void DispatchProjectedSplats(
+            Matrix4x4 worldToView,
+            Matrix4x4 gpuProjection,
+            int projectedSplatOffset,
+            int width,
+            int height,
+            int dispatchGroups)
+        {
+            var viewProjection = gpuProjection * worldToView;
+            projectionComputeShader.SetInt("_ProjectedSplatOffset", projectedSplatOffset);
+            projectionComputeShader.SetMatrix("_WorldToView", worldToView);
+            projectionComputeShader.SetMatrix("_ProjectionMatrix", gpuProjection);
+            projectionComputeShader.SetMatrix("_ViewProjection", viewProjection);
+            projectionComputeShader.SetVector("_CameraWorldPosition", ExtractCameraWorldPosition(worldToView));
+            projectionComputeShader.SetVector("_ViewportSize", new Vector4(width, height, 1f / width, 1f / height));
+            projectionComputeShader.Dispatch(projectionKernel, dispatchGroups, 1, 1);
+        }
+
         private static void ResolveProjectionMatrices(
             Camera camera,
             out Matrix4x4 worldToView,
@@ -2334,15 +2353,13 @@ namespace Chimera.Runtime
             {
                 if (camera.stereoActiveEye == Camera.MonoOrStereoscopicEye.Left)
                 {
-                    worldToView = camera.GetStereoViewMatrix(Camera.StereoscopicEye.Left);
-                    gpuProjection = GL.GetGPUProjectionMatrix(camera.GetStereoProjectionMatrix(Camera.StereoscopicEye.Left), false);
+                    ResolveStereoProjectionMatrices(camera, Camera.StereoscopicEye.Left, out worldToView, out gpuProjection);
                     return;
                 }
 
                 if (camera.stereoActiveEye == Camera.MonoOrStereoscopicEye.Right)
                 {
-                    worldToView = camera.GetStereoViewMatrix(Camera.StereoscopicEye.Right);
-                    gpuProjection = GL.GetGPUProjectionMatrix(camera.GetStereoProjectionMatrix(Camera.StereoscopicEye.Right), false);
+                    ResolveStereoProjectionMatrices(camera, Camera.StereoscopicEye.Right, out worldToView, out gpuProjection);
                     return;
                 }
             }
@@ -2350,6 +2367,33 @@ namespace Chimera.Runtime
             worldToView = camera != null ? camera.worldToCameraMatrix : Matrix4x4.identity;
             var projection = camera != null ? camera.projectionMatrix : Matrix4x4.identity;
             gpuProjection = GL.GetGPUProjectionMatrix(projection, false);
+        }
+
+        private static void ResolveStereoProjectionMatrices(
+            Camera camera,
+            Camera.StereoscopicEye eye,
+            out Matrix4x4 worldToView,
+            out Matrix4x4 gpuProjection)
+        {
+            worldToView = camera.GetStereoViewMatrix(eye);
+            gpuProjection = GL.GetGPUProjectionMatrix(camera.GetStereoProjectionMatrix(eye), false);
+        }
+
+        private static void ResolveProjectionViewport(Camera camera, out int width, out int height)
+        {
+            width = Mathf.Max(1, camera != null ? camera.pixelWidth : Screen.width);
+            height = Mathf.Max(1, camera != null ? camera.pixelHeight : Screen.height);
+            if (camera != null && camera.stereoEnabled && XRSettings.eyeTextureWidth > 0 && XRSettings.eyeTextureHeight > 0)
+            {
+                width = Mathf.Max(1, XRSettings.eyeTextureWidth);
+                height = Mathf.Max(1, XRSettings.eyeTextureHeight);
+            }
+        }
+
+        private static Vector3 ExtractCameraWorldPosition(Matrix4x4 worldToView)
+        {
+            var cameraToWorld = worldToView.inverse;
+            return cameraToWorld.MultiplyPoint3x4(Vector3.zero);
         }
 
         private static bool IsSinglePassStereoCamera(Camera camera)
@@ -2474,7 +2518,7 @@ namespace Chimera.Runtime
                 return;
             }
 
-            projectedSplatBuffer = new ComputeBuffer(RenderedSplatCount, ProjectedSplatStride, ComputeBufferType.Structured);
+            projectedSplatBuffer = new ComputeBuffer(RenderedSplatCount * ProjectedSplatCacheMaxEyeCount, ProjectedSplatStride, ComputeBufferType.Structured);
             if (sphericalHarmonicsBuffer == null)
             {
                 projectionDummySphericalHarmonicsBuffer = new ComputeBuffer(1, SphericalHarmonicsSplatStride, ComputeBufferType.Structured);

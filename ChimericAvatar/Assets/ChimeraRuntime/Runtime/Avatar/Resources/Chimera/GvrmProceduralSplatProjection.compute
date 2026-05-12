@@ -44,6 +44,7 @@ StructuredBuffer<SphericalHarmonicsSplat> _SphericalHarmonics;
 RWStructuredBuffer<ProjectedSplat> _ProjectedSplats;
 
 int _SplatCount;
+int _ProjectedSplatOffset;
 float4x4 _WorldToView;
 float4x4 _ProjectionMatrix;
 float4x4 _ViewProjection;
@@ -164,6 +165,7 @@ void ProjectSplats(uint3 id : SV_DispatchThreadID)
         return;
     }
 
+    uint projectedIndex = (uint)_ProjectedSplatOffset + index;
     ProceduralSplat splat = _Splats[index];
     float3 centerWS = splat.centerWS.xyz;
     float3 centerVS = mul(_WorldToView, float4(centerWS, 1.0)).xyz;
@@ -171,7 +173,7 @@ void ProjectSplats(uint3 id : SV_DispatchThreadID)
     float clipLimit = abs(clipCenter.w) * 1.2;
     if (centerVS.z >= -1e-4 || abs(clipCenter.x) > clipLimit || abs(clipCenter.y) > clipLimit)
     {
-        _ProjectedSplats[index] = InvalidProjectedSplat();
+        _ProjectedSplats[projectedIndex] = InvalidProjectedSplat();
         return;
     }
 
@@ -214,7 +216,7 @@ void ProjectSplats(uint3 id : SV_DispatchThreadID)
     SolveEigen2(c00, c01, c11, lambda0, lambda1, dir0);
     if (lambda1 <= 0.0)
     {
-        _ProjectedSplats[index] = InvalidProjectedSplat();
+        _ProjectedSplats[projectedIndex] = InvalidProjectedSplat();
         return;
     }
 
@@ -257,5 +259,5 @@ void ProjectSplats(uint3 id : SV_DispatchThreadID)
     projected.axis1Ndc = float4(axis1Ndc, 0.0, 0.0);
     projected.color = color;
     projected.meta = float4(clipCenter.z / clipCenter.w, max(radius0Pixels, radius1Pixels), 1.0, 0.0);
-    _ProjectedSplats[index] = projected;
+    _ProjectedSplats[projectedIndex] = projected;
 }

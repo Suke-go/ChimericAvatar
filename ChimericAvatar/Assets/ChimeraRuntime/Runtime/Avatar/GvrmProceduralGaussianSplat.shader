@@ -107,6 +107,8 @@ Shader "Chimera/GVRM Procedural Gaussian Splat"
                 float _SurfaceContinuityShStability;
                 float _UseProceduralInstances;
                 float _UseProjectedSplatCache;
+                int _ProjectedSplatCacheEyeStride;
+                int _ProjectedSplatCacheEyeCount;
                 float4x4 _WorldToGsLocal;
             CBUFFER_END
 
@@ -236,7 +238,15 @@ Shader "Chimera/GVRM Procedural Gaussian Splat"
                 uint splatIndex = _DrawOrder[drawIndex];
                 if (_UseProjectedSplatCache > 0.5)
                 {
-                    ProjectedSplat projected = _ProjectedSplats[splatIndex];
+                    uint projectedEyeCount = (uint)max(1, _ProjectedSplatCacheEyeCount);
+                    uint projectedEyeStride = (uint)max(0, _ProjectedSplatCacheEyeStride);
+                    uint projectedEyeIndex = 0;
+                    #if defined(UNITY_SINGLE_PASS_STEREO)
+                    projectedEyeIndex = min((uint)unity_StereoEyeIndex, projectedEyeCount - 1);
+                    #endif
+
+                    uint projectedIndex = projectedEyeIndex * projectedEyeStride + splatIndex;
+                    ProjectedSplat projected = _ProjectedSplats[projectedIndex];
                     if (projected.meta.z < 0.5)
                     {
                         output.positionHCS = float4(0.0, 0.0, 2.0, 1.0);
