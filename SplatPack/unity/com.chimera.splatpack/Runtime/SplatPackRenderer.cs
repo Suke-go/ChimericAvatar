@@ -26,10 +26,10 @@ namespace SplatPack.Runtime
         [SerializeField] private float recenterDistanceMeters = 3f;
 
         [Header("Quality")]
-        [SerializeField] private float opacityScale = 1f;
-        [SerializeField] private float splatScale = 1f;
+        [SerializeField] private float opacityScale = 2f;
+        [SerializeField] private float splatScale = 1.25f;
         [SerializeField] private float alphaClip;
-        [SerializeField] private float minScreenRadiusPixels;
+        [SerializeField] private float minScreenRadiusPixels = 0.75f;
         [SerializeField] private float maxScreenRadiusPixels = 1024f;
         [SerializeField] private float kernel2DSize = 0.3f;
         [SerializeField] private float eigenTermFloor = 0.1f;
@@ -452,8 +452,68 @@ namespace SplatPack.Runtime
                 + $"eye={XRSettings.eyeTextureWidth}x{XRSettings.eyeTextureHeight}, "
                 + $"rendererPosition={transform.position}, "
                 + $"projection={lastProjectionDispatchCpuMs:0.###}ms-cpu/{Mathf.Max(1, lastProjectionEyeCount)}eye, "
+                + BuildProjectionDiagnostics(camera)
                 + $"splats={package.SplatCount}, chunks={package.ChunkCount}, "
                 + $"vertices={package.SplatCount * 6 * ResolveProceduralDrawInstanceCount(camera)}.");
+        }
+
+        private string BuildProjectionDiagnostics(Camera camera)
+        {
+            if (projectedBuffer == null || package == null || package.SplatCount <= 0)
+            {
+                return "projected=unavailable, ";
+            }
+
+            try
+            {
+                var projected = new SplatPackProjectedSplat[package.SplatCount];
+                projectedBuffer.GetData(projected, 0, 0, package.SplatCount);
+
+                int validCount = 0;
+                int firstValid = -1;
+                float maxRadius = 0f;
+                float maxAlpha = 0f;
+                Vector2 firstNdc = Vector2.zero;
+                float firstRadius = 0f;
+                float firstAlpha = 0f;
+
+                for (int i = 0; i < projected.Length; i++)
+                {
+                    SplatPackProjectedSplat splat = projected[i];
+                    if (splat.Meta.z < 0.5f)
+                    {
+                        continue;
+                    }
+
+                    validCount++;
+                    float alpha = splat.Color.w;
+                    float radius = splat.Meta.y;
+                    maxAlpha = Mathf.Max(maxAlpha, alpha);
+                    maxRadius = Mathf.Max(maxRadius, radius);
+
+                    if (firstValid < 0)
+                    {
+                        firstValid = i;
+                        float invW = Mathf.Abs(splat.ClipCenter.w) > 1e-6f ? 1f / splat.ClipCenter.w : 0f;
+                        firstNdc = new Vector2(splat.ClipCenter.x * invW, splat.ClipCenter.y * invW);
+                        firstRadius = radius;
+                        firstAlpha = alpha;
+                    }
+                }
+
+                string cameraInfo = camera != null
+                    ? $"cameraPos={camera.transform.position}, cameraForward={camera.transform.forward}, "
+                    : string.Empty;
+                return cameraInfo
+                    + $"validProjected={validCount}/{package.SplatCount}, "
+                    + $"firstValid={firstValid}, firstNdc=({firstNdc.x:0.###},{firstNdc.y:0.###}), "
+                    + $"firstRadius={firstRadius:0.###}, firstAlpha={firstAlpha:0.###}, "
+                    + $"maxRadius={maxRadius:0.###}, maxAlpha={maxAlpha:0.###}, ";
+            }
+            catch (Exception ex)
+            {
+                return $"projectionReadback=failed:{ex.GetType().Name}, ";
+            }
         }
 
         private void ReleaseBuffers()

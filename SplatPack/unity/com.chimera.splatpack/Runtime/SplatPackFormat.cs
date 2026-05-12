@@ -25,6 +25,16 @@ namespace SplatPack.Runtime
         public Vector4 Meta;
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    public struct SplatPackProjectedSplat
+    {
+        public Vector4 ClipCenter;
+        public Vector4 Axis0Ndc;
+        public Vector4 Axis1Ndc;
+        public Vector4 Color;
+        public Vector4 Meta;
+    }
+
     public sealed class SplatPackPackage
     {
         public Bounds Bounds;
