@@ -72,3 +72,13 @@ SplatPack/experiments/fetch-samples.ps1 -Set Smoke -Compile
 
 This downloads a small PLY into `experiments/data/` and compiles it to
 `.splatpack`. The data directory is ignored by git.
+
+For local Unity validation, stage the compiled asset under:
+
+```text
+ChimericAvatar/Assets/SplatPackSamples/External/
+```
+
+Then use `Tools > SplatPack > Create Viewer From First Sample` in Unity. This
+menu searches `Assets/SplatPackSamples` and creates a configured viewer from the
+first imported `.splatpack` asset it finds.

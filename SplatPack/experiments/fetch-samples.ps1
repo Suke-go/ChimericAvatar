@@ -21,8 +21,14 @@ function Download-File {
     New-Item -ItemType Directory -Force $dir | Out-Null
 
     if (Test-Path $Path) {
-        Write-Host "skip existing $Path"
-        return
+        $existing = Get-Item $Path
+        if ($existing.Length -gt 0) {
+            Write-Host "skip existing $Path"
+            return
+        }
+
+        Write-Host "retry incomplete $Path"
+        Remove-Item -LiteralPath $Path -Force
     }
 
     Write-Host "download $Url"
@@ -55,22 +61,22 @@ if ($Set -eq "Smoke") {
 if ($Set -eq "WakuCc0") {
     $assets += @{
         Name = "wakufactory_kadan1"
-        Url = "https://wakufactory.sakura.ne.jp/wxr/splats/assets/kadan1.ply"
+        Url = "https://wakufactory.sakura.ne.jp/assets/ply/20240324_kadan1.ply"
         RelativePath = "wakufactory/kadan1.ply"
     }
     $assets += @{
         Name = "wakufactory_kaeru"
-        Url = "https://wakufactory.sakura.ne.jp/wxr/splats/assets/kaeru.ply"
+        Url = "https://wakufactory.sakura.ne.jp/assets/ply/20240324_kaeru.ply"
         RelativePath = "wakufactory/kaeru.ply"
     }
     $assets += @{
         Name = "wakufactory_kitune_trimmed"
-        Url = "https://wakufactory.sakura.ne.jp/wxr/splats/assets/kitune_trimmed.ply"
+        Url = "https://www.wakufactory.jp/wxr/splats/data/kitune1.ply"
         RelativePath = "wakufactory/kitune_trimmed.ply"
     }
     $assets += @{
         Name = "wakufactory_sakura_trimmed"
-        Url = "https://wakufactory.sakura.ne.jp/wxr/splats/assets/sakura_trimmed.ply"
+        Url = "https://www.wakufactory.jp/wxr/splats/data/sakura1.ply"
         RelativePath = "wakufactory/sakura_trimmed.ply"
     }
 }

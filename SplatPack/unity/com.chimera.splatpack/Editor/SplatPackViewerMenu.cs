@@ -22,6 +22,35 @@ namespace SplatPack.Editor
                 return;
             }
 
+            CreateViewer(asset);
+        }
+
+        [MenuItem("Tools/SplatPack/Create Viewer From First Sample")]
+        private static void CreateViewerFromFirstSample()
+        {
+            string[] guids = AssetDatabase.FindAssets("t:SplatPackAsset", new[] { "Assets/SplatPackSamples" });
+            if (guids.Length == 0)
+            {
+                EditorUtility.DisplayDialog(
+                    "SplatPack",
+                    "No imported .splatpack sample was found under Assets/SplatPackSamples.",
+                    "OK");
+                return;
+            }
+
+            string assetPath = AssetDatabase.GUIDToAssetPath(guids[0]);
+            SplatPackAsset asset = AssetDatabase.LoadAssetAtPath<SplatPackAsset>(assetPath);
+            if (asset == null)
+            {
+                EditorUtility.DisplayDialog("SplatPack", $"Could not load sample asset at {assetPath}.", "OK");
+                return;
+            }
+
+            CreateViewer(asset);
+        }
+
+        private static void CreateViewer(SplatPackAsset asset)
+        {
             ComputeShader projection = FindProjectionCompute();
             if (projection == null)
             {
@@ -30,6 +59,12 @@ namespace SplatPack.Editor
             }
 
             Material material = FindOrCreateMaterial();
+            if (material == null)
+            {
+                EditorUtility.DisplayDialog("SplatPack", "Could not find or create the SplatPack material.", "OK");
+                return;
+            }
+
             var viewer = new GameObject("SplatPack Viewer");
             Undo.RegisterCreatedObjectUndo(viewer, "Create SplatPack Viewer");
             var renderer = viewer.AddComponent<SplatPackRenderer>();

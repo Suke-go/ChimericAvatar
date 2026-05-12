@@ -47,6 +47,15 @@ role: parser compatibility and XR viewer validation
 license: CC0 according to source page
 ```
 
+The fetch script currently uses:
+
+```text
+https://wakufactory.sakura.ne.jp/assets/ply/20240324_kadan1.ply
+https://wakufactory.sakura.ne.jp/assets/ply/20240324_kaeru.ply
+https://www.wakufactory.jp/wxr/splats/data/kitune1.ply
+https://www.wakufactory.jp/wxr/splats/data/sakura1.ply
+```
+
 If the current compiler rejects these files, keep them as parser-expansion test
 cases rather than blocking the first runtime validation.
 
