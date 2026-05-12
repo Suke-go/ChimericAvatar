@@ -1,0 +1,16 @@
+{
+  "name": "com.chimera.splatpack",
+  "displayName": "SplatPack",
+  "version": "0.1.0",
+  "unity": "2022.3",
+  "description": "Standalone XR runtime package for compiled 3D Gaussian Splatting assets.",
+  "keywords": [
+    "gaussian-splatting",
+    "xr",
+    "openxr",
+    "unity"
+  ],
+  "author": {
+    "name": "Chimera"
+  }
+}

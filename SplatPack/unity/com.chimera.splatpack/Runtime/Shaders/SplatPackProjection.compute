@@ -1,0 +1,142 @@
+#pragma kernel ProjectSplats
+
+struct SplatPackSplat
+{
+    float4 centerWS;
+    float4 axis0WS;
+    float4 axis1WS;
+    float4 axis2WS;
+    float4 color;
+    float4 meta;
+};
+
+struct ProjectedSplat
+{
+    float4 clipCenter;
+    float4 axis0Ndc;
+    float4 axis1Ndc;
+    float4 color;
+    // x: depth, y: max radius pixels, z: valid flag, w: reserved.
+    float4 meta;
+};
+
+StructuredBuffer<SplatPackSplat> _Splats;
+RWStructuredBuffer<ProjectedSplat> _ProjectedSplats;
+
+int _SplatCount;
+int _ProjectedSplatOffset;
+float4x4 _WorldToView;
+float4x4 _ProjectionMatrix;
+float4x4 _ViewProjection;
+float3 _CameraWorldPosition;
+float4 _ViewportSize;
+float _SplatScale;
+float _OpacityScale;
+float _MinScreenRadiusPixels;
+float _MaxScreenRadiusPixels;
+float _Kernel2DSize;
+float _EigenTermFloor;
+
+static const float kGaussianExtent = 2.8284271247461903;
+
+ProjectedSplat InvalidProjectedSplat()
+{
+    ProjectedSplat value;
+    value.clipCenter = float4(0.0, 0.0, 2.0, 1.0);
+    value.axis0Ndc = 0.0;
+    value.axis1Ndc = 0.0;
+    value.color = 0.0;
+    value.meta = 0.0;
+    return value;
+}
+
+void SolveEigen2(float c00, float c01, float c11, out float lambda0, out float lambda1, out float2 dir0)
+{
+    float determinant = c00 * c11 - c01 * c01;
+    float traceOver2 = 0.5 * (c00 + c11);
+    float term2 = sqrt(max(_EigenTermFloor, traceOver2 * traceOver2 - determinant));
+    lambda0 = traceOver2 + term2;
+    lambda1 = traceOver2 - term2;
+
+    if (abs(c01) > 1e-8)
+    {
+        dir0 = normalize(float2(c01, lambda0 - c00));
+    }
+    else
+    {
+        dir0 = c00 >= c11 ? float2(1.0, 0.0) : float2(0.0, 1.0);
+    }
+}
+
+[numthreads(64, 1, 1)]
+void ProjectSplats(uint3 id : SV_DispatchThreadID)
+{
+    uint index = id.x;
+    if (index >= (uint)_SplatCount)
+    {
+        return;
+    }
+
+    uint projectedIndex = (uint)_ProjectedSplatOffset + index;
+    SplatPackSplat splat = _Splats[index];
+    float3 centerWS = splat.centerWS.xyz;
+    float3 centerVS = mul(_WorldToView, float4(centerWS, 1.0)).xyz;
+    float4 clipCenter = mul(_ViewProjection, float4(centerWS, 1.0));
+    float clipLimit = abs(clipCenter.w) * 1.2;
+
+    if (centerVS.z >= -1e-4 || abs(clipCenter.x) > clipLimit || abs(clipCenter.y) > clipLimit)
+    {
+        _ProjectedSplats[projectedIndex] = InvalidProjectedSplat();
+        return;
+    }
+
+    float depth = max(1e-4, -centerVS.z);
+    float3 axis0VS = mul((float3x3)_WorldToView, splat.axis0WS.xyz);
+    float3 axis1VS = mul((float3x3)_WorldToView, splat.axis1WS.xyz);
+    float3 axis2VS = mul((float3x3)_WorldToView, splat.axis2WS.xyz);
+
+    float covXX = dot(float3(axis0VS.x, axis1VS.x, axis2VS.x), float3(axis0VS.x, axis1VS.x, axis2VS.x));
+    float covXY = dot(float3(axis0VS.x, axis1VS.x, axis2VS.x), float3(axis0VS.y, axis1VS.y, axis2VS.y));
+    float covXZ = dot(float3(axis0VS.x, axis1VS.x, axis2VS.x), float3(axis0VS.z, axis1VS.z, axis2VS.z));
+    float covYY = dot(float3(axis0VS.y, axis1VS.y, axis2VS.y), float3(axis0VS.y, axis1VS.y, axis2VS.y));
+    float covYZ = dot(float3(axis0VS.y, axis1VS.y, axis2VS.y), float3(axis0VS.z, axis1VS.z, axis2VS.z));
+    float covZZ = dot(float3(axis0VS.z, axis1VS.z, axis2VS.z), float3(axis0VS.z, axis1VS.z, axis2VS.z));
+
+    float focalX = abs(_ProjectionMatrix._m00) * _ViewportSize.x * 0.5;
+    float focalY = abs(_ProjectionMatrix._m11) * _ViewportSize.y * 0.5;
+    float invDepth = 1.0 / depth;
+    float invDepthSq = invDepth * invDepth;
+    float j00 = focalX * invDepth;
+    float j02 = focalX * centerVS.x * invDepthSq;
+    float j11 = focalY * invDepth;
+    float j12 = focalY * centerVS.y * invDepthSq;
+
+    float c00 = j00 * j00 * covXX + 2.0 * j00 * j02 * covXZ + j02 * j02 * covZZ + max(0.0, _Kernel2DSize);
+    float c01 = j00 * j11 * covXY + j00 * j12 * covXZ + j02 * j11 * covYZ + j02 * j12 * covZZ;
+    float c11 = j11 * j11 * covYY + 2.0 * j11 * j12 * covYZ + j12 * j12 * covZZ + max(0.0, _Kernel2DSize);
+
+    float lambda0;
+    float lambda1;
+    float2 dir0;
+    SolveEigen2(c00, c01, c11, lambda0, lambda1, dir0);
+    if (lambda1 <= 0.0)
+    {
+        _ProjectedSplats[projectedIndex] = InvalidProjectedSplat();
+        return;
+    }
+
+    float2 dir1 = float2(dir0.y, -dir0.x);
+    float maxRadiusPixels = max(_MinScreenRadiusPixels, _MaxScreenRadiusPixels);
+    float radius0Pixels = max(_MinScreenRadiusPixels, _SplatScale * min(kGaussianExtent * sqrt(lambda0), maxRadiusPixels));
+    float radius1Pixels = max(_MinScreenRadiusPixels, _SplatScale * min(kGaussianExtent * sqrt(lambda1), maxRadiusPixels));
+    float2 axis0Ndc = 2.0 * dir0 * radius0Pixels / max(float2(1.0, 1.0), _ViewportSize.xy);
+    float2 axis1Ndc = 2.0 * dir1 * radius1Pixels / max(float2(1.0, 1.0), _ViewportSize.xy);
+
+    ProjectedSplat projected;
+    projected.clipCenter = clipCenter;
+    projected.axis0Ndc = float4(axis0Ndc, 0.0, 0.0);
+    projected.axis1Ndc = float4(axis1Ndc, 0.0, 0.0);
+    projected.color = float4(saturate(splat.color.rgb), saturate(splat.color.a * _OpacityScale));
+    projected.meta = float4(clipCenter.z / clipCenter.w, max(radius0Pixels, radius1Pixels), 1.0, 0.0);
+    _ProjectedSplats[projectedIndex] = projected;
+}
