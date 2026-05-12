@@ -163,6 +163,7 @@ namespace Chimera.Runtime
         private int allocatedSortBinCount;
         private int allocatedCullBlockCount;
         private bool warnedMissingMaterial;
+        private bool warnedProjectedCacheSinglePassStereo;
         private bool loggedFirstDraw;
         private int lastDrawFrame = -1;
         private string lastDrawCameraName = "none";
@@ -2012,13 +2013,19 @@ namespace Chimera.Runtime
 
             if (IsXrRenderingActive())
             {
-                if (camera.cameraType == CameraType.Game || camera.stereoEnabled)
+                if (camera.cameraType != CameraType.Game)
+                {
+                    skipReason = $"xr-skip-{camera.cameraType}";
+                    return false;
+                }
+
+                if (camera.stereoEnabled)
                 {
                     skipReason = string.Empty;
                     return true;
                 }
 
-                skipReason = $"xr-skip-{camera.cameraType}";
+                skipReason = $"xr-skip-mono-game:{camera.name}";
                 return false;
             }
 
@@ -2138,7 +2145,8 @@ namespace Chimera.Runtime
             lastDrawPath = $"{phase}-{(useIndirectVisibleDraw ? "indirect" : IsXrRenderingActive() ? "full-xr-safe" : "full")}";
             lastDrawSkipReason = "none";
 
-            var signature = $"{lastDrawPath}|{lastDrawCameraName}|{camera?.cameraType}|xr:{IsXrRenderingActive()}";
+            var stereoEye = camera != null ? camera.stereoActiveEye.ToString() : "None";
+            var signature = $"{lastDrawPath}|{lastDrawCameraName}|{camera?.cameraType}|xr:{IsXrRenderingActive()}|eye:{stereoEye}";
             if (!loggedFirstDraw
                 || signature != lastLoggedDrawSignature
                 || (logPeriodicDrawDiagnostics && Time.unscaledTime >= nextDrawDiagnosticLogTime))
@@ -2150,6 +2158,7 @@ namespace Chimera.Runtime
                     "[Chimera GVRM] Procedural splat draw submitted: "
                     + $"path={lastDrawPath}, camera={lastDrawCameraName}, "
                     + $"cameraType={camera?.cameraType}, stereo={camera != null && camera.stereoEnabled}, "
+                    + $"stereoEye={stereoEye}, "
                     + $"xrActive={IsXrRenderingActive()}, platform={Application.platform}, "
                     + $"graphics={SystemInfo.graphicsDeviceType}, runtimePath={runtimePath}, "
                     + $"projection={(lastProjectedSplatCacheUsed ? $"gpu-cache/{lastProjectionDispatchCpuMs:0.###}ms-cpu" : "vertex-shader")}, "
@@ -2249,6 +2258,20 @@ namespace Chimera.Runtime
                 return false;
             }
 
+            if (IsSinglePassStereoCamera(camera))
+            {
+                if (!warnedProjectedCacheSinglePassStereo)
+                {
+                    warnedProjectedCacheSinglePassStereo = true;
+                    Debug.LogWarning(
+                        "[Chimera GVRM] Projected splat cache is disabled for Single Pass stereo "
+                        + $"(camera.stereoActiveEye={camera.stereoActiveEye}). The current cache is single-view; use Multi Pass "
+                        + "for exact per-eye projected caching, or stay on the reference vertex-shader path.");
+                }
+
+                return false;
+            }
+
             try
             {
                 var stopwatch = System.Diagnostics.Stopwatch.StartNew();
@@ -2327,6 +2350,19 @@ namespace Chimera.Runtime
             worldToView = camera != null ? camera.worldToCameraMatrix : Matrix4x4.identity;
             var projection = camera != null ? camera.projectionMatrix : Matrix4x4.identity;
             gpuProjection = GL.GetGPUProjectionMatrix(projection, false);
+        }
+
+        private static bool IsSinglePassStereoCamera(Camera camera)
+        {
+            if (camera == null || !camera.stereoEnabled)
+            {
+                return false;
+            }
+
+            var activeEye = camera.stereoActiveEye;
+            return camera != null
+                   && activeEye != Camera.MonoOrStereoscopicEye.Left
+                   && activeEye != Camera.MonoOrStereoscopicEye.Right;
         }
 
         private Matrix4x4 BuildWorldToGsLocalMatrix()
