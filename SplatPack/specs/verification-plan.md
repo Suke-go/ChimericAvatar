@@ -28,6 +28,7 @@ dotnet run --project SplatPack/compiler/SplatPack.Compiler.csproj -- `
   C:\path\to\input.ply `
   C:\path\to\output.splatpack `
   --target standalone-xr `
+  --max-splats 120000 `
   --chunk-size 4096
 ```
 
@@ -43,6 +44,7 @@ runtime tuning. Important fields:
 ```text
 Counts.PrunedInvalidSplats
 Counts.PrunedLowOpacitySplats
+Counts.PrunedBudgetSplats
 Counts.AxisClampedSplats
 RawMaxAxisLength
 EmittedMaxAxisLength

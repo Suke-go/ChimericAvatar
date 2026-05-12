@@ -18,6 +18,7 @@ chunk metadata, but already applies compiler-side safety passes:
 
 - drops invalid splats
 - prunes near-zero opacity splats
+- keeps the highest-contribution splats under a standalone XR splat budget
 - caps extreme Gaussian axis lengths using a percentile budget
 - writes a JSON build report next to the package
 
@@ -28,9 +29,11 @@ Useful options:
 ```powershell
 dotnet run --project SplatPack/compiler -- input.ply output.splatpack `
   --target standalone-xr `
+  --max-splats 120000 `
   --opacity-prune 0.002 `
   --max-axis-percentile 99 `
-  --max-axis-multiplier 1.1
+  --max-axis-multiplier 1.1 `
+  --contribution-axis-power 0.5
 ```
 
 Later passes should add quantized attributes, LOD levels, and richer sort

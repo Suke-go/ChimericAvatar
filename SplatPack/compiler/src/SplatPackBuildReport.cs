@@ -24,10 +24,12 @@ public sealed class SplatPackBuildReport
 public sealed class SplatPackBuildReportOptions
 {
     public required int ChunkSize { get; init; }
+    public required int MaxSplats { get; init; }
     public required float OpacityPruneThreshold { get; init; }
     public required float AxisLengthCap { get; init; }
     public required float MaxAxisLengthPercentile { get; init; }
     public required float MaxAxisLengthMultiplier { get; init; }
+    public required float ContributionAxisPower { get; init; }
 }
 
 public sealed class SplatPackBuildReportCounts
@@ -36,6 +38,7 @@ public sealed class SplatPackBuildReportCounts
     public required int EmittedSplats { get; init; }
     public required int PrunedInvalidSplats { get; init; }
     public required int PrunedLowOpacitySplats { get; init; }
+    public required int PrunedBudgetSplats { get; init; }
     public required int AxisClampedSplats { get; init; }
 }
 

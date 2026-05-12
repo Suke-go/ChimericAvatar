@@ -32,7 +32,7 @@ public static class SplatPackBuilder
             return new SplatPackBuildResult
             {
                 Package = emptyPackage,
-                Report = BuildReport(emptyPackage, options, SplatPackRotationOrder.WXYZ, 0f, 0, 0, 0, Array.Empty<float>(), Array.Empty<float>(), Array.Empty<float>(), Array.Empty<float>()),
+                Report = BuildReport(emptyPackage, options, SplatPackRotationOrder.WXYZ, 0f, 0, 0, 0, 0, Array.Empty<float>(), Array.Empty<float>(), Array.Empty<float>(), Array.Empty<float>()),
             };
         }
 
@@ -45,6 +45,7 @@ public static class SplatPackBuilder
             out int prunedLowOpacity,
             out float[] rawOpacities,
             out float[] rawMaxAxisLengths);
+        int prunedBudget = 0;
 
         if (candidates.Length <= 0)
         {
@@ -57,11 +58,12 @@ public static class SplatPackBuilder
             return new SplatPackBuildResult
             {
                 Package = emptyPackage,
-                Report = BuildReport(emptyPackage, options, rotationOrder, 0f, prunedInvalid, prunedLowOpacity, 0, rawOpacities, rawMaxAxisLengths, Array.Empty<float>(), Array.Empty<float>()),
+                Report = BuildReport(emptyPackage, options, rotationOrder, 0f, prunedInvalid, prunedLowOpacity, prunedBudget, 0, rawOpacities, rawMaxAxisLengths, Array.Empty<float>(), Array.Empty<float>()),
             };
         }
 
         float axisLengthCap = ResolveAxisLengthCap(candidates, options);
+        candidates = ApplySplatBudget(candidates, options, axisLengthCap, out prunedBudget);
         SplatPackBounds bounds = ComputeBounds(stream, candidates);
         int gridResolution = Math.Max(1, (int)Math.Ceiling(Math.Pow(candidates.Length / (double)targetChunkSize, 1.0 / 3.0)));
 
@@ -125,6 +127,7 @@ public static class SplatPackBuilder
                 axisLengthCap,
                 prunedInvalid,
                 prunedLowOpacity,
+                prunedBudget,
                 axisClampedSplats,
                 rawOpacities,
                 rawMaxAxisLengths,
@@ -170,6 +173,43 @@ public static class SplatPackBuilder
         rawOpacities = opacityStats.ToArray();
         rawMaxAxisLengths = axisStats.ToArray();
         return candidates.ToArray();
+    }
+
+    private static Candidate[] ApplySplatBudget(
+        Candidate[] candidates,
+        SplatPackBuildOptions options,
+        float axisLengthCap,
+        out int prunedBudget)
+    {
+        int maxSplats = Math.Max(0, options.MaxSplats);
+        if (maxSplats == 0 || candidates.Length <= maxSplats)
+        {
+            prunedBudget = 0;
+            return candidates;
+        }
+
+        var ranked = (Candidate[])candidates.Clone();
+        float axisPower = Math.Clamp(options.ContributionAxisPower, 0f, 2f);
+        Array.Sort(ranked, (a, b) =>
+        {
+            float scoreA = ContributionScore(a, axisLengthCap, axisPower);
+            float scoreB = ContributionScore(b, axisLengthCap, axisPower);
+            int byScore = scoreB.CompareTo(scoreA);
+            return byScore != 0 ? byScore : a.SourceIndex.CompareTo(b.SourceIndex);
+        });
+
+        Array.Resize(ref ranked, maxSplats);
+        prunedBudget = candidates.Length - ranked.Length;
+        return ranked;
+    }
+
+    private static float ContributionScore(Candidate candidate, float axisLengthCap, float axisPower)
+    {
+        float maxAxis = axisLengthCap > 0f
+            ? MathF.Min(candidate.MaxAxisLength, axisLengthCap)
+            : candidate.MaxAxisLength;
+        float axisTerm = axisPower <= 0f ? 1f : MathF.Pow(MathF.Max(MinimumScale, maxAxis), axisPower);
+        return candidate.Opacity * axisTerm;
     }
 
     private static bool TryInspectRawSplat(GaussianSplatStream stream, int index, out float opacity, out float maxAxisLength)
@@ -419,6 +459,7 @@ public static class SplatPackBuilder
         float axisLengthCap,
         int prunedInvalid,
         int prunedLowOpacity,
+        int prunedBudget,
         int axisClampedSplats,
         float[] rawOpacities,
         float[] rawMaxAxisLengths,
@@ -433,10 +474,12 @@ public static class SplatPackBuilder
             Options = new SplatPackBuildReportOptions
             {
                 ChunkSize = Math.Max(1, options.ChunkSize),
+                MaxSplats = Math.Max(0, options.MaxSplats),
                 OpacityPruneThreshold = MathF.Max(0f, options.OpacityPruneThreshold),
                 AxisLengthCap = axisLengthCap,
                 MaxAxisLengthPercentile = options.MaxAxisLengthPercentile,
                 MaxAxisLengthMultiplier = options.MaxAxisLengthMultiplier,
+                ContributionAxisPower = options.ContributionAxisPower,
             },
             Counts = new SplatPackBuildReportCounts
             {
@@ -444,6 +487,7 @@ public static class SplatPackBuilder
                 EmittedSplats = package.Splats.Length,
                 PrunedInvalidSplats = prunedInvalid,
                 PrunedLowOpacitySplats = prunedLowOpacity,
+                PrunedBudgetSplats = prunedBudget,
                 AxisClampedSplats = axisClampedSplats,
             },
             Bounds = new SplatPackBuildReportBounds

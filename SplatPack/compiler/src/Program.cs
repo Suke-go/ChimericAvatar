@@ -22,6 +22,7 @@ internal static class Program
             string inputPath = args[0];
             string outputPath = args[1];
             SplatPackTargetProfile targetProfile = ReadTargetProfileOption(args, "--target", SplatPackTargetProfile.StandaloneXr);
+            int maxSplats = ReadIntOption(args, "--max-splats", targetProfile == SplatPackTargetProfile.StandaloneXr ? 120_000 : 0);
             int chunkSize = ReadIntOption(args, "--chunk-size", DefaultChunkSize);
             SplatPackRotationOrder rotationOrder = ReadRotationOrderOption(args, "--rotation-order", SplatPackRotationOrder.Auto);
             float opacityPruneThreshold = ReadFloatOption(
@@ -34,6 +35,7 @@ internal static class Program
                 targetProfile == SplatPackTargetProfile.StandaloneXr ? 99f : 0f);
             float maxAxisLengthMultiplier = ReadFloatOption(args, "--max-axis-multiplier", 1.1f);
             float maxAxisLength = ReadFloatOption(args, "--max-axis-length", 0f);
+            float contributionAxisPower = ReadFloatOption(args, "--contribution-axis-power", 0.5f);
             bool writeReport = !args.Contains("--no-report");
             string reportPath = ReadStringOption(args, "--report", outputPath + ".report.json");
 
@@ -51,10 +53,12 @@ internal static class Program
                 ChunkSize = Math.Max(1, chunkSize),
                 RotationOrder = rotationOrder,
                 TargetProfile = targetProfile,
+                MaxSplats = Math.Max(0, maxSplats),
                 OpacityPruneThreshold = MathF.Max(0f, opacityPruneThreshold),
                 MaxAxisLength = MathF.Max(0f, maxAxisLength),
                 MaxAxisLengthPercentile = Math.Clamp(maxAxisLengthPercentile, 0f, 100f),
                 MaxAxisLengthMultiplier = MathF.Max(0.01f, maxAxisLengthMultiplier),
+                ContributionAxisPower = Math.Clamp(contributionAxisPower, 0f, 2f),
             };
             SplatPackBuildResult result = SplatPackBuilder.BuildWithReport(stream, options);
             SplatPackPackage package = result.Package;
@@ -71,7 +75,7 @@ internal static class Program
             Console.WriteLine(
                 string.Create(
                     CultureInfo.InvariantCulture,
-                    $"SplatPack compiled: target={targetProfile}, splats={package.Splats.Length}/{stream.Count}, chunks={package.Chunks.Length}, rotation={resolvedRotationOrder}, prunedInvalid={result.Report.Counts.PrunedInvalidSplats}, prunedOpacity={result.Report.Counts.PrunedLowOpacitySplats}, axisClamped={result.Report.Counts.AxisClampedSplats}, axisCap={result.Report.Options.AxisLengthCap:0.######}, output={outputPath}, report={(writeReport ? reportPath : "off")}"));
+                    $"SplatPack compiled: target={targetProfile}, splats={package.Splats.Length}/{stream.Count}, chunks={package.Chunks.Length}, rotation={resolvedRotationOrder}, prunedInvalid={result.Report.Counts.PrunedInvalidSplats}, prunedOpacity={result.Report.Counts.PrunedLowOpacitySplats}, prunedBudget={result.Report.Counts.PrunedBudgetSplats}, axisClamped={result.Report.Counts.AxisClampedSplats}, axisCap={result.Report.Options.AxisLengthCap:0.######}, output={outputPath}, report={(writeReport ? reportPath : "off")}"));
             return 0;
         }
         catch (Exception ex)
@@ -171,6 +175,6 @@ internal static class Program
 
     private static void PrintUsage()
     {
-        Console.WriteLine("Usage: SplatPackCompiler input.ply output.splatpack [--target reference|standalone-xr] [--chunk-size 4096] [--rotation-order auto|xyzw|wxyz] [--opacity-prune 0.002] [--max-axis-percentile 99] [--max-axis-multiplier 1.1] [--max-axis-length meters] [--report path] [--no-report]");
+        Console.WriteLine("Usage: SplatPackCompiler input.ply output.splatpack [--target reference|standalone-xr] [--max-splats 120000] [--chunk-size 4096] [--rotation-order auto|xyzw|wxyz] [--opacity-prune 0.002] [--max-axis-percentile 99] [--max-axis-multiplier 1.1] [--max-axis-length meters] [--contribution-axis-power 0.5] [--report path] [--no-report]");
     }
 }
