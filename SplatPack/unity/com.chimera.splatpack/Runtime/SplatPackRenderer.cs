@@ -223,19 +223,15 @@ namespace SplatPack.Runtime
             }
 
 #pragma warning disable 0618
-            Graphics.DrawProcedural(
-                material,
-                ResolveDrawBounds(),
-                MeshTopology.Triangles,
-                package.SplatCount * 6,
-                ResolveProceduralDrawInstanceCount(camera),
-                null,
-                propertyBlock,
-                ShadowCastingMode.Off,
-                false,
-                gameObject.layer);
+            if (material.SetPass(0))
+            {
+                Graphics.DrawProceduralNow(
+                    MeshTopology.Triangles,
+                    package.SplatCount * 6,
+                    ResolveProceduralDrawInstanceCount(camera));
+            }
 #pragma warning restore 0618
-            MaybeLogDiagnostics(camera, "camera-post");
+            MaybeLogDiagnostics(camera, "camera-post-now");
         }
 
         private bool TryPrepare(Camera camera, Material material)
@@ -269,8 +265,21 @@ namespace SplatPack.Runtime
             propertyBlock.SetFloat("_AlphaClip", Mathf.Max(0f, alphaClip));
             propertyBlock.SetInt("_ProjectedSplatCacheEyeStride", package.SplatCount);
             propertyBlock.SetInt("_ProjectedSplatCacheEyeCount", eyeCount);
-            material.SetFloat("_UseProjectedSplatCache", 1f);
+            ApplyMaterialProperties(material, eyeCount);
             return true;
+        }
+
+        private void ApplyMaterialProperties(Material material, int eyeCount)
+        {
+            material.SetBuffer("_Splats", splatBuffer);
+            material.SetBuffer("_DrawOrder", drawOrderBuffer);
+            material.SetBuffer("_ProjectedSplats", projectedBuffer);
+            material.SetFloat("_OpacityScale", Mathf.Max(0f, opacityScale));
+            material.SetFloat("_SplatScale", Mathf.Max(0f, splatScale));
+            material.SetFloat("_AlphaClip", Mathf.Max(0f, alphaClip));
+            material.SetFloat("_UseProjectedSplatCache", 1f);
+            material.SetInt("_ProjectedSplatCacheEyeStride", package.SplatCount);
+            material.SetInt("_ProjectedSplatCacheEyeCount", eyeCount);
         }
 
         private int DispatchProjectedSplats(Camera camera)
