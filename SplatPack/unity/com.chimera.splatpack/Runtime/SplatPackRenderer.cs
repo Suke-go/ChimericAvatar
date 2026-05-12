@@ -25,6 +25,7 @@ namespace SplatPack.Runtime
         private const float StandaloneSafeMaxRadiusPixels = 40f;
         private const float StandaloneSafeMaxEccentricity = 4f;
         private const float StandaloneSafeKernel2DSize = 0.18f;
+        private const int StandaloneSafeDepthSortBinCount = 4096;
         private const float MinimumTailAlphaClip = 0.004f;
 
         [Header("Input")]
@@ -58,7 +59,7 @@ namespace SplatPack.Runtime
         [SerializeField] private SplatPackSortMode sortMode = SplatPackSortMode.GpuDepthBucket;
         [SerializeField] private int sortIntervalFrames = 1;
         [SerializeField] private int xrSortIntervalFrames = 2;
-        [SerializeField] private int depthSortBinCount = 8192;
+        [SerializeField] private int depthSortBinCount = 4096;
         [SerializeField] private bool skipStableSortFrames = true;
 
         [Header("Temporal Cache")]
@@ -453,7 +454,7 @@ namespace SplatPack.Runtime
                 return false;
             }
 
-            if (!EnsureGpuSortResources())
+            if (!EnsureGpuSortResources(camera))
             {
                 return false;
             }
@@ -496,7 +497,7 @@ namespace SplatPack.Runtime
             }
         }
 
-        private bool EnsureGpuSortResources()
+        private bool EnsureGpuSortResources(Camera camera)
         {
             if (sortCompute == null)
             {
@@ -535,7 +536,7 @@ namespace SplatPack.Runtime
                 }
             }
 
-            int requestedBinCount = Mathf.Clamp(depthSortBinCount, 256, 16384);
+            int requestedBinCount = ResolveDepthSortBinCount(camera);
             if (sortBinCountBuffer != null && allocatedSortBinCount == requestedBinCount)
             {
                 return true;
@@ -546,6 +547,18 @@ namespace SplatPack.Runtime
             sortBinCountBuffer = new ComputeBuffer(allocatedSortBinCount, sizeof(uint), ComputeBufferType.Structured);
             sortBinOffsetBuffer = new ComputeBuffer(allocatedSortBinCount, sizeof(uint), ComputeBufferType.Structured);
             return true;
+        }
+
+        private int ResolveDepthSortBinCount(Camera camera)
+        {
+            int requested = Mathf.Clamp(depthSortBinCount, 256, 16384);
+            if (enforceStandaloneRadiusCap
+                && ((camera != null && camera.stereoEnabled) || XRSettings.enabled || XRSettings.isDeviceActive))
+            {
+                requested = Mathf.Min(requested, StandaloneSafeDepthSortBinCount);
+            }
+
+            return requested;
         }
 
         private void BindSortBuffers(int kernel)

@@ -76,6 +76,7 @@ Shader "Chimera/SplatPack Gaussian Splat"
             {
                 float4 positionHCS : SV_POSITION;
                 float2 gaussianUV : TEXCOORD0;
+                float radiusPixels : TEXCOORD1;
                 float4 color : COLOR;
                 UNITY_VERTEX_OUTPUT_STEREO
             };
@@ -112,6 +113,7 @@ Shader "Chimera/SplatPack Gaussian Splat"
                 {
                     output.positionHCS = float4(0.0, 0.0, 2.0, 1.0);
                     output.gaussianUV = float2(99.0, 99.0);
+                    output.radiusPixels = 0.0;
                     output.color = 0.0;
                     return output;
                 }
@@ -122,6 +124,7 @@ Shader "Chimera/SplatPack Gaussian Splat"
 
                 output.positionHCS = clip;
                 output.gaussianUV = corner * kGaussianExtent;
+                output.radiusPixels = projected.meta.y;
                 output.color = projected.color;
                 return output;
             }
@@ -130,8 +133,11 @@ Shader "Chimera/SplatPack Gaussian Splat"
             {
                 UNITY_SETUP_STEREO_EYE_INDEX_POST_VERTEX(input);
                 float r2 = dot(input.gaussianUV, input.gaussianUV);
-                clip(8.0 - r2);
+                float edgeDistance = 8.0 - r2;
+                clip(edgeDistance);
                 float alpha = exp(-0.5 * r2) * input.color.a * _OpacityScale;
+                float smallRadiusFade = saturate((2.0 - input.radiusPixels) * 0.5);
+                alpha *= saturate(edgeDistance * lerp(1.0, 0.625, smallRadiusFade));
                 clip(alpha - _AlphaClip);
                 return float4(input.color.rgb, alpha);
             }

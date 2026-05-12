@@ -1,0 +1,5 @@
+asset,condition,headset_editor,unity_version,render_api,xr_enabled,stereo_mode,eye_resolution,splats,chunks,vertices,projection_path,sort_path,projection_cpu_ms,sort_cpu_ms,fps,cpu_frame_ms,gpu_frame_ms,visual_notes,artifacts,pass_fail,log_excerpt,observer,observed_at
+,A_raw_baseline,,,,,,,,,,,,,,,,,,,,,,
+,B_splatpack_full_projected_cache,,,,,,,,,,,,,,,,,,,,,,
+,C_splatpack_smaller_chunk_size,,,,,,,,,,,,,,,,,,,,,,
+,D_splatpack_lod_culling_future,,,,,,,,,,,,,,,,,,,,,,

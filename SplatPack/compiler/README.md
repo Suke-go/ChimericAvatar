@@ -18,7 +18,8 @@ chunk metadata, but already applies compiler-side safety passes:
 
 - drops invalid splats
 - prunes near-zero opacity splats
-- keeps the highest-contribution splats under a standalone XR splat budget
+- keeps splats under a standalone XR budget with spatial grid quotas so sparse
+  chunks are not erased by a global contribution ranking
 - caps extreme Gaussian axis lengths using a percentile budget
 - caps needle-like Gaussian axis ratios before runtime projection
 - writes a JSON build report next to the package

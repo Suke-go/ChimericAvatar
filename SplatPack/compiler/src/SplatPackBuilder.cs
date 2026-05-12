@@ -9,6 +9,15 @@ public static class SplatPackBuilder
 
     private readonly record struct Candidate(int SourceIndex, float Opacity, float MaxAxisLength, float AxisRatio);
 
+    private sealed class BudgetCell
+    {
+        public required long Key { get; init; }
+        public required List<Candidate> Candidates { get; init; }
+        public required float BestScore { get; init; }
+        public int Quota { get; set; }
+        public double Remainder { get; set; }
+    }
+
     public static SplatPackPackage Build(GaussianSplatStream stream, int targetChunkSize)
     {
         return Build(stream, new SplatPackBuildOptions { ChunkSize = targetChunkSize });
@@ -64,7 +73,7 @@ public static class SplatPackBuilder
         }
 
         float axisLengthCap = ResolveAxisLengthCap(candidates, options);
-        candidates = ApplySplatBudget(candidates, options, axisLengthCap, out prunedBudget);
+        candidates = ApplySplatBudget(stream, candidates, options, axisLengthCap, out prunedBudget);
         SplatPackBounds bounds = ComputeBounds(stream, candidates);
         int gridResolution = Math.Max(1, (int)Math.Ceiling(Math.Pow(candidates.Length / (double)targetChunkSize, 1.0 / 3.0)));
 
@@ -192,6 +201,7 @@ public static class SplatPackBuilder
     }
 
     private static Candidate[] ApplySplatBudget(
+        GaussianSplatStream stream,
         Candidate[] candidates,
         SplatPackBuildOptions options,
         float axisLengthCap,
@@ -204,19 +214,159 @@ public static class SplatPackBuilder
             return candidates;
         }
 
-        var ranked = (Candidate[])candidates.Clone();
         float axisPower = Math.Clamp(options.ContributionAxisPower, 0f, 2f);
-        Array.Sort(ranked, (a, b) =>
-        {
-            float scoreA = ContributionScore(a, axisLengthCap, axisPower);
-            float scoreB = ContributionScore(b, axisLengthCap, axisPower);
-            int byScore = scoreB.CompareTo(scoreA);
-            return byScore != 0 ? byScore : a.SourceIndex.CompareTo(b.SourceIndex);
-        });
+        SplatPackBounds bounds = ComputeBounds(stream, candidates);
+        int targetChunkSize = Math.Max(1, options.ChunkSize);
+        int gridResolution = Math.Max(1, (int)Math.Ceiling(Math.Pow(maxSplats / (double)targetChunkSize, 1.0 / 3.0)));
 
-        Array.Resize(ref ranked, maxSplats);
-        prunedBudget = candidates.Length - ranked.Length;
-        return ranked;
+        var cells = new Dictionary<long, List<Candidate>>();
+        foreach (Candidate candidate in candidates)
+        {
+            long key = GridKey(stream, bounds, gridResolution, candidate.SourceIndex);
+            if (!cells.TryGetValue(key, out List<Candidate>? cell))
+            {
+                cell = new List<Candidate>();
+                cells.Add(key, cell);
+            }
+
+            cell.Add(candidate);
+        }
+
+        var budgetCells = new List<BudgetCell>(cells.Count);
+        long[] orderedKeys = cells.Keys.ToArray();
+        Array.Sort(orderedKeys);
+
+        foreach (long key in orderedKeys)
+        {
+            List<Candidate> cellCandidates = cells[key];
+            cellCandidates.Sort((a, b) => CompareByContribution(a, b, axisLengthCap, axisPower));
+            budgetCells.Add(new BudgetCell
+            {
+                Key = key,
+                Candidates = cellCandidates,
+                BestScore = ContributionScore(cellCandidates[0], axisLengthCap, axisPower),
+            });
+        }
+
+        AllocateSpatialQuotas(budgetCells, candidates.Length, maxSplats);
+
+        var selected = new List<Candidate>(maxSplats);
+        var selectedSourceIndices = new HashSet<int>();
+        foreach (BudgetCell cell in budgetCells)
+        {
+            int quota = Math.Clamp(cell.Quota, 0, cell.Candidates.Count);
+            for (int i = 0; i < quota; i++)
+            {
+                if (selected.Count == maxSplats)
+                {
+                    break;
+                }
+
+                Candidate candidate = cell.Candidates[i];
+                selected.Add(candidate);
+                selectedSourceIndices.Add(candidate.SourceIndex);
+            }
+        }
+
+        if (selected.Count < maxSplats)
+        {
+            var ranked = (Candidate[])candidates.Clone();
+            Array.Sort(ranked, (a, b) => CompareByContribution(a, b, axisLengthCap, axisPower));
+            foreach (Candidate candidate in ranked)
+            {
+                if (selected.Count == maxSplats)
+                {
+                    break;
+                }
+
+                if (selectedSourceIndices.Add(candidate.SourceIndex))
+                {
+                    selected.Add(candidate);
+                }
+            }
+        }
+
+        prunedBudget = candidates.Length - selected.Count;
+        return selected.ToArray();
+    }
+
+    private static void AllocateSpatialQuotas(List<BudgetCell> cells, int candidateCount, int maxSplats)
+    {
+        int minimumQuota = cells.Count <= maxSplats ? 1 : 0;
+        int quotaTotal = minimumQuota * cells.Count;
+        int remainingBudget = maxSplats - quotaTotal;
+        int remainingCapacity = candidateCount - quotaTotal;
+
+        // If the budget can touch every occupied cell, reserve one splat per cell.
+        // Otherwise some cells must receive zero; the largest-remainder pass below
+        // chooses them deterministically by density, contribution, then grid key.
+        foreach (BudgetCell cell in cells)
+        {
+            cell.Quota = minimumQuota;
+            cell.Remainder = 0.0;
+
+            int capacity = Math.Max(0, cell.Candidates.Count - cell.Quota);
+            if (remainingBudget <= 0 || remainingCapacity <= 0 || capacity == 0)
+            {
+                continue;
+            }
+
+            double exactAdditionalQuota = capacity * (double)remainingBudget / remainingCapacity;
+            int additionalQuota = Math.Min(capacity, (int)Math.Floor(exactAdditionalQuota));
+            cell.Quota += additionalQuota;
+            quotaTotal += additionalQuota;
+            cell.Remainder = exactAdditionalQuota - additionalQuota;
+        }
+
+        int toAdd = maxSplats - quotaTotal;
+        if (toAdd <= 0)
+        {
+            return;
+        }
+
+        var fillOrder = cells
+            .Where(cell => cell.Quota < cell.Candidates.Count)
+            .ToList();
+        fillOrder.Sort(CompareQuotaFillPriority);
+
+        int cursor = 0;
+        int idlePasses = 0;
+        while (toAdd > 0 && fillOrder.Count > 0 && idlePasses < fillOrder.Count)
+        {
+            BudgetCell cell = fillOrder[cursor];
+            if (cell.Quota < cell.Candidates.Count)
+            {
+                cell.Quota++;
+                toAdd--;
+                idlePasses = 0;
+            }
+            else
+            {
+                idlePasses++;
+            }
+
+            cursor = (cursor + 1) % fillOrder.Count;
+        }
+    }
+
+    private static int CompareQuotaFillPriority(BudgetCell a, BudgetCell b)
+    {
+        int byRemainder = b.Remainder.CompareTo(a.Remainder);
+        if (byRemainder != 0)
+        {
+            return byRemainder;
+        }
+
+        int byScore = b.BestScore.CompareTo(a.BestScore);
+        return byScore != 0 ? byScore : a.Key.CompareTo(b.Key);
+    }
+
+    private static int CompareByContribution(Candidate a, Candidate b, float axisLengthCap, float axisPower)
+    {
+        float scoreA = ContributionScore(a, axisLengthCap, axisPower);
+        float scoreB = ContributionScore(b, axisLengthCap, axisPower);
+        int byScore = scoreB.CompareTo(scoreA);
+        return byScore != 0 ? byScore : a.SourceIndex.CompareTo(b.SourceIndex);
     }
 
     private static float ContributionScore(Candidate candidate, float axisLengthCap, float axisPower)

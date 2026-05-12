@@ -19,7 +19,15 @@ renders them with a projected splat cache.
 
 The menu command creates a `SplatPack Viewer` GameObject, assigns
 `SplatPackRenderer`, finds `SplatPackProjection.compute`, and creates a material
-using shader `Chimera/SplatPack Gaussian Splat` if needed.
+using shader `Chimera/SplatPack Gaussian Splat` if needed. It also logs the
+selected `.splatpack`, assigned compute shaders, material, camera, and renderer
+quality defaults to the Unity Console.
+
+Use `Tools -> SplatPack -> Create Viewer From First Sample` to try the first
+`.splatpack` under `Assets/SplatPackSamples`. If no sample is present, the menu
+shows where to copy a compiled file. Use `Tools -> SplatPack -> Log Renderer
+Quality Defaults` to inspect the default renderer quality settings without
+creating a viewer.
 
 Manual setup is also supported:
 
