@@ -1,4 +1,5 @@
 using SplatPack.Runtime;
+using System.IO;
 using UnityEditor;
 using UnityEngine;
 
@@ -28,25 +29,81 @@ namespace SplatPack.Editor
         [MenuItem("Tools/SplatPack/Create Viewer From First Sample")]
         private static void CreateViewerFromFirstSample()
         {
-            string[] guids = AssetDatabase.FindAssets("t:SplatPackAsset", new[] { "Assets/SplatPackSamples" });
-            if (guids.Length == 0)
+            SplatPackAsset asset = FindFirstSampleAsset();
+            if (asset == null)
             {
                 EditorUtility.DisplayDialog(
                     "SplatPack",
-                    "No imported .splatpack sample was found under Assets/SplatPackSamples.",
+                    "No usable .splatpack sample was found under Assets/SplatPackSamples.",
                     "OK");
                 return;
             }
 
-            string assetPath = AssetDatabase.GUIDToAssetPath(guids[0]);
-            SplatPackAsset asset = AssetDatabase.LoadAssetAtPath<SplatPackAsset>(assetPath);
-            if (asset == null)
+            CreateViewer(asset);
+        }
+
+        private static SplatPackAsset FindFirstSampleAsset()
+        {
+            const string sampleFolder = "Assets/SplatPackSamples";
+            StageLocalExperimentSampleIfNeeded(sampleFolder);
+            AssetDatabase.Refresh();
+
+            if (!AssetDatabase.IsValidFolder(sampleFolder))
             {
-                EditorUtility.DisplayDialog("SplatPack", $"Could not load sample asset at {assetPath}.", "OK");
+                return null;
+            }
+
+            string[] files = Directory.GetFiles(sampleFolder, "*.splatpack", SearchOption.AllDirectories);
+            foreach (string file in files)
+            {
+                string assetPath = file.Replace('\\', '/');
+                AssetDatabase.ImportAsset(assetPath, ImportAssetOptions.ForceUpdate);
+                SplatPackAsset asset = AssetDatabase.LoadAssetAtPath<SplatPackAsset>(assetPath);
+                if (asset != null)
+                {
+                    return asset;
+                }
+            }
+
+            return null;
+        }
+
+        private static void StageLocalExperimentSampleIfNeeded(string sampleFolder)
+        {
+            string projectRoot = Directory.GetParent(Application.dataPath)?.FullName;
+            if (string.IsNullOrEmpty(projectRoot))
+            {
                 return;
             }
 
-            CreateViewer(asset);
+            string destinationFolder = Path.Combine(projectRoot, sampleFolder.Replace('/', Path.DirectorySeparatorChar), "External");
+            if (Directory.Exists(destinationFolder) &&
+                Directory.GetFiles(destinationFolder, "*.splatpack", SearchOption.TopDirectoryOnly).Length > 0)
+            {
+                return;
+            }
+
+            string repoRoot = Directory.GetParent(projectRoot)?.FullName;
+            if (string.IsNullOrEmpty(repoRoot))
+            {
+                return;
+            }
+
+            string sourcePath = Path.Combine(
+                repoRoot,
+                "SplatPack",
+                "experiments",
+                "data",
+                "smoke",
+                "j0n45_point_cloud.splatpack");
+            if (!File.Exists(sourcePath))
+            {
+                return;
+            }
+
+            Directory.CreateDirectory(destinationFolder);
+            string destinationPath = Path.Combine(destinationFolder, Path.GetFileName(sourcePath));
+            File.Copy(sourcePath, destinationPath, overwrite: true);
         }
 
         private static void CreateViewer(SplatPackAsset asset)
