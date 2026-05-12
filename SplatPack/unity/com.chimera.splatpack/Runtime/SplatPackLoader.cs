@@ -35,7 +35,10 @@ namespace SplatPack.Runtime
             int chunkCount = reader.ReadInt32();
             int splatStride = reader.ReadInt32();
             int chunkStride = reader.ReadInt32();
-            if (splatStride != SplatPackFormat.SplatStride || chunkStride != SplatPackFormat.ChunkStride)
+            bool supportedChunkStride =
+                chunkStride == SplatPackFormat.ChunkStride
+                || chunkStride == SplatPackFormat.LegacyHeaderChunkStride;
+            if (splatStride != SplatPackFormat.SplatStride || !supportedChunkStride)
             {
                 throw new InvalidDataException($"Unsupported SplatPack layout: splatStride={splatStride}, chunkStride={chunkStride}.");
             }

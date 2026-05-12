@@ -6,6 +6,13 @@ using UnityEngine.XR;
 
 namespace SplatPack.Runtime
 {
+    public enum SplatPackSortMode
+    {
+        None,
+        ChunkDepth,
+        SplatDepth,
+    }
+
     [DisallowMultipleComponent]
     public sealed class SplatPackRenderer : MonoBehaviour
     {
@@ -26,17 +33,17 @@ namespace SplatPack.Runtime
         [SerializeField] private float recenterDistanceMeters = 3f;
 
         [Header("Quality")]
-        [SerializeField] private float opacityScale = 2f;
-        [SerializeField] private float splatScale = 1.25f;
+        [SerializeField] private float opacityScale = 1.5f;
+        [SerializeField] private float splatScale = 1f;
         [SerializeField] private float alphaClip;
         [SerializeField] private float minScreenRadiusPixels = 0.75f;
-        [SerializeField] private float maxScreenRadiusPixels = 1024f;
+        [SerializeField] private float maxScreenRadiusPixels = 64f;
         [SerializeField] private float kernel2DSize = 0.3f;
         [SerializeField] private float eigenTermFloor = 0.1f;
 
         [Header("Sorting")]
-        [SerializeField] private bool enableChunkDepthSort = true;
-        [SerializeField] private int chunkSortIntervalFrames = 1;
+        [SerializeField] private SplatPackSortMode sortMode = SplatPackSortMode.SplatDepth;
+        [SerializeField] private int sortIntervalFrames = 1;
 
         [Header("Diagnostics")]
         [SerializeField] private bool logDiagnostics = true;
@@ -55,6 +62,7 @@ namespace SplatPack.Runtime
         private int lastProjectionEyeCount;
         private uint[] drawOrderCpu;
         private ChunkSortItem[] chunkSortItems;
+        private SplatSortItem[] splatSortItems;
         private int lastDrawOrderSortFrame = -1;
         private float lastDrawOrderSortCpuMs;
         private bool didRecenter;
@@ -63,6 +71,12 @@ namespace SplatPack.Runtime
         private struct ChunkSortItem
         {
             public int ChunkIndex;
+            public float ViewDepth;
+        }
+
+        private struct SplatSortItem
+        {
+            public int SplatIndex;
             public float ViewDepth;
         }
 
@@ -129,6 +143,7 @@ namespace SplatPack.Runtime
             drawOrderBuffer = new ComputeBuffer(package.SplatCount, sizeof(uint), ComputeBufferType.Structured);
             drawOrderBuffer.SetData(drawOrderCpu);
             chunkSortItems = new ChunkSortItem[package.ChunkCount];
+            splatSortItems = new SplatSortItem[package.SplatCount];
             lastDrawOrderSortFrame = -1;
             lastDrawOrderSortCpuMs = 0f;
 
@@ -302,36 +317,52 @@ namespace SplatPack.Runtime
 
         private void UpdateDrawOrder(Camera camera)
         {
-            if (!enableChunkDepthSort
+            if (sortMode == SplatPackSortMode.None
                 || camera == null
                 || package == null
                 || drawOrderCpu == null
                 || drawOrderBuffer == null
-                || chunkSortItems == null
                 || package.ChunkCount <= 0)
             {
                 return;
             }
 
             int frame = Time.frameCount;
-            int interval = Mathf.Max(1, chunkSortIntervalFrames);
+            int interval = Mathf.Max(1, sortIntervalFrames);
             if (lastDrawOrderSortFrame >= 0 && frame - lastDrawOrderSortFrame < interval)
             {
                 return;
             }
 
             Diagnostics.Stopwatch stopwatch = Diagnostics.Stopwatch.StartNew();
-            Matrix4x4 worldToView = camera.worldToCameraMatrix;
+            Vector3 cameraPosition = camera.transform.position;
+            Vector3 cameraForward = camera.transform.forward.normalized;
+            if (sortMode == SplatPackSortMode.SplatDepth && splatSortItems != null)
+            {
+                UpdateSplatDepthOrder(cameraPosition, cameraForward);
+            }
+            else if (chunkSortItems != null)
+            {
+                UpdateChunkDepthOrder(cameraPosition, cameraForward);
+            }
+
+            drawOrderBuffer.SetData(drawOrderCpu);
+            stopwatch.Stop();
+            lastDrawOrderSortFrame = frame;
+            lastDrawOrderSortCpuMs = (float)stopwatch.Elapsed.TotalMilliseconds;
+        }
+
+        private void UpdateChunkDepthOrder(Vector3 cameraPosition, Vector3 cameraForward)
+        {
             for (int i = 0; i < package.Chunks.Length; i++)
             {
                 SplatPackChunk chunk = package.Chunks[i];
                 Vector3 localCenter = (chunk.BoundsMin + chunk.BoundsMax) * 0.5f;
                 Vector3 worldCenter = transform.TransformPoint(localCenter);
-                float viewDepth = worldToView.MultiplyPoint3x4(worldCenter).z;
                 chunkSortItems[i] = new ChunkSortItem
                 {
                     ChunkIndex = i,
-                    ViewDepth = viewDepth,
+                    ViewDepth = -Vector3.Dot(worldCenter - cameraPosition, cameraForward),
                 };
             }
 
@@ -355,11 +386,27 @@ namespace SplatPack.Runtime
                     drawOrderCpu[splatIndex] = (uint)splatIndex;
                 }
             }
+        }
 
-            drawOrderBuffer.SetData(drawOrderCpu);
-            stopwatch.Stop();
-            lastDrawOrderSortFrame = frame;
-            lastDrawOrderSortCpuMs = (float)stopwatch.Elapsed.TotalMilliseconds;
+        private void UpdateSplatDepthOrder(Vector3 cameraPosition, Vector3 cameraForward)
+        {
+            for (int i = 0; i < package.Splats.Length; i++)
+            {
+                Vector4 center = package.Splats[i].CenterWS;
+                Vector3 localCenter = new Vector3(center.x, center.y, center.z);
+                Vector3 worldCenter = transform.TransformPoint(localCenter);
+                splatSortItems[i] = new SplatSortItem
+                {
+                    SplatIndex = i,
+                    ViewDepth = -Vector3.Dot(worldCenter - cameraPosition, cameraForward),
+                };
+            }
+
+            Array.Sort(splatSortItems, (a, b) => a.ViewDepth.CompareTo(b.ViewDepth));
+            for (int i = 0; i < splatSortItems.Length; i++)
+            {
+                drawOrderCpu[i] = (uint)splatSortItems[i].SplatIndex;
+            }
         }
 
         private int DispatchProjectedSplats(Camera camera)
@@ -541,10 +588,20 @@ namespace SplatPack.Runtime
                 + $"eye={XRSettings.eyeTextureWidth}x{XRSettings.eyeTextureHeight}, "
                 + $"rendererPosition={transform.position}, "
                 + $"projection={lastProjectionDispatchCpuMs:0.###}ms-cpu/{Mathf.Max(1, lastProjectionEyeCount)}eye, "
-                + $"sort={(enableChunkDepthSort ? $"chunk-depth/{package.ChunkCount}/{lastDrawOrderSortCpuMs:0.###}ms-cpu" : "off")}, "
+                + $"sort={BuildSortDiagnostics()}, "
                 + BuildProjectionDiagnostics(camera)
                 + $"splats={package.SplatCount}, chunks={package.ChunkCount}, "
                 + $"vertices={package.SplatCount * 6 * ResolveProceduralDrawInstanceCount(camera)}.");
+        }
+
+        private string BuildSortDiagnostics()
+        {
+            return sortMode switch
+            {
+                SplatPackSortMode.ChunkDepth => $"chunk-depth/{package.ChunkCount}/{lastDrawOrderSortCpuMs:0.###}ms-cpu",
+                SplatPackSortMode.SplatDepth => $"splat-depth/{package.SplatCount}/{lastDrawOrderSortCpuMs:0.###}ms-cpu",
+                _ => "off",
+            };
         }
 
         private string BuildProjectionDiagnostics(Camera camera)
@@ -616,6 +673,7 @@ namespace SplatPack.Runtime
             projectedBuffer = null;
             drawOrderCpu = null;
             chunkSortItems = null;
+            splatSortItems = null;
         }
     }
 }

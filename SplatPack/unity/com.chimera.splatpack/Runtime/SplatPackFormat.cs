@@ -50,6 +50,7 @@ namespace SplatPack.Runtime
         public const int Version = 1;
         public const int SplatStride = 24 * sizeof(float);
         public const int ProjectedSplatStride = 20 * sizeof(float);
-        public const int ChunkStride = 8 * sizeof(float) + 3 * sizeof(int);
+        public const int ChunkStride = 6 * sizeof(float) + 3 * sizeof(int);
+        public const int LegacyHeaderChunkStride = 8 * sizeof(float) + 3 * sizeof(int);
     }
 }
