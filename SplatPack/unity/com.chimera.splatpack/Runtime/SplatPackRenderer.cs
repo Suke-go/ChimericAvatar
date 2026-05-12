@@ -21,8 +21,10 @@ namespace SplatPack.Runtime
         private const int SortThreadGroupSize = 64;
         private const int MaxProjectedEyes = 2;
         private const float StandaloneSafeOpacityScale = 1f;
+        private const float StandaloneSafeMinRadiusPixels = 1.1f;
         private const float StandaloneSafeMaxRadiusPixels = 40f;
         private const float StandaloneSafeMaxEccentricity = 4f;
+        private const float StandaloneSafeKernel2DSize = 0.18f;
         private const float MinimumTailAlphaClip = 0.004f;
 
         [Header("Input")]
@@ -682,11 +684,11 @@ namespace SplatPack.Runtime
             projectionCompute.SetFloat("_SplatScale", ResolveSplatScale());
             projectionCompute.SetFloat("_OpacityScale", ResolveOpacityScale());
             projectionCompute.SetFloat("_OpacityPower", ResolveOpacityPower());
-            projectionCompute.SetFloat("_MinScreenRadiusPixels", Mathf.Max(0f, minScreenRadiusPixels));
+            projectionCompute.SetFloat("_MinScreenRadiusPixels", ResolveMinScreenRadiusPixels());
             projectionCompute.SetFloat("_MaxScreenRadiusPixels", ResolveMaxScreenRadiusPixels());
             projectionCompute.SetFloat("_MaxScreenEccentricity", ResolveMaxScreenEccentricity());
             projectionCompute.SetFloat("_EccentricityOpacityPower", ResolveEccentricityOpacityPower());
-            projectionCompute.SetFloat("_Kernel2DSize", Mathf.Max(0f, kernel2DSize));
+            projectionCompute.SetFloat("_Kernel2DSize", ResolveKernel2DSize());
             projectionCompute.SetFloat("_EigenTermFloor", Mathf.Max(0f, eigenTermFloor));
             projectionCompute.SetMatrix("_SplatLocalToWorld", transform.localToWorldMatrix);
 
@@ -753,9 +755,15 @@ namespace SplatPack.Runtime
             return Mathf.Max(enforceStandaloneRadiusCap ? MinimumTailAlphaClip : 0f, alphaClip);
         }
 
+        private float ResolveMinScreenRadiusPixels()
+        {
+            float value = Mathf.Max(0f, minScreenRadiusPixels);
+            return enforceStandaloneRadiusCap ? Mathf.Max(value, StandaloneSafeMinRadiusPixels) : value;
+        }
+
         private float ResolveMaxScreenRadiusPixels()
         {
-            float value = Mathf.Max(minScreenRadiusPixels, maxScreenRadiusPixels);
+            float value = Mathf.Max(ResolveMinScreenRadiusPixels(), maxScreenRadiusPixels);
             return enforceStandaloneRadiusCap ? Mathf.Min(value, StandaloneSafeMaxRadiusPixels) : value;
         }
 
@@ -769,6 +777,12 @@ namespace SplatPack.Runtime
         {
             float value = Mathf.Max(0f, eccentricityOpacityPower);
             return enforceStandaloneRadiusCap ? Mathf.Max(value, 1f) : value;
+        }
+
+        private float ResolveKernel2DSize()
+        {
+            float value = Mathf.Max(0f, kernel2DSize);
+            return enforceStandaloneRadiusCap ? Mathf.Max(value, StandaloneSafeKernel2DSize) : value;
         }
 
         private int ResolveSortIntervalFrames(Camera camera)
@@ -908,7 +922,7 @@ namespace SplatPack.Runtime
                 + $"rendererPosition={transform.position}, "
                 + $"projection={lastProjectionPath}/{lastProjectionDispatchCpuMs:0.###}ms-cpu/{Mathf.Max(1, lastProjectionEyeCount)}eye, "
                 + $"sort={BuildSortDiagnostics()}, "
-                + $"quality=opacity/{ResolveOpacityScale():0.###},opPow/{ResolveOpacityPower():0.###},scale/{ResolveSplatScale():0.###},maxR/{ResolveMaxScreenRadiusPixels():0.###},ecc/{ResolveMaxScreenEccentricity():0.###},eccPow/{ResolveEccentricityOpacityPower():0.###},clip/{ResolveAlphaClip():0.####}, "
+                + $"quality=opacity/{ResolveOpacityScale():0.###},opPow/{ResolveOpacityPower():0.###},scale/{ResolveSplatScale():0.###},minR/{ResolveMinScreenRadiusPixels():0.###},maxR/{ResolveMaxScreenRadiusPixels():0.###},ecc/{ResolveMaxScreenEccentricity():0.###},eccPow/{ResolveEccentricityOpacityPower():0.###},k2d/{ResolveKernel2DSize():0.###},clip/{ResolveAlphaClip():0.####}, "
                 + BuildProjectionDiagnostics(camera)
                 + $"splats={package.SplatCount}, chunks={package.ChunkCount}, "
                 + $"vertices={package.SplatCount * 6 * ResolveProceduralDrawInstanceCount(camera)}.");
@@ -1041,11 +1055,11 @@ namespace SplatPack.Runtime
 
             return Mathf.Approximately(lastProjectionOpacityPower, ResolveOpacityPower())
                    && Mathf.Approximately(lastProjectionSplatScale, ResolveSplatScale())
-                   && Mathf.Approximately(lastProjectionMinRadius, Mathf.Max(0f, minScreenRadiusPixels))
+                   && Mathf.Approximately(lastProjectionMinRadius, ResolveMinScreenRadiusPixels())
                    && Mathf.Approximately(lastProjectionMaxRadius, ResolveMaxScreenRadiusPixels())
                    && Mathf.Approximately(lastProjectionMaxEccentricity, ResolveMaxScreenEccentricity())
                    && Mathf.Approximately(lastProjectionEccentricityOpacityPower, ResolveEccentricityOpacityPower())
-                   && Mathf.Approximately(lastProjectionKernel2DSize, Mathf.Max(0f, kernel2DSize));
+                   && Mathf.Approximately(lastProjectionKernel2DSize, ResolveKernel2DSize());
         }
 
         private void RememberProjectionCacheState(Camera camera, int width, int height, bool stereo)
@@ -1065,11 +1079,11 @@ namespace SplatPack.Runtime
             lastProjectionStereo = stereo;
             lastProjectionOpacityPower = ResolveOpacityPower();
             lastProjectionSplatScale = ResolveSplatScale();
-            lastProjectionMinRadius = Mathf.Max(0f, minScreenRadiusPixels);
+            lastProjectionMinRadius = ResolveMinScreenRadiusPixels();
             lastProjectionMaxRadius = ResolveMaxScreenRadiusPixels();
             lastProjectionMaxEccentricity = ResolveMaxScreenEccentricity();
             lastProjectionEccentricityOpacityPower = ResolveEccentricityOpacityPower();
-            lastProjectionKernel2DSize = Mathf.Max(0f, kernel2DSize);
+            lastProjectionKernel2DSize = ResolveKernel2DSize();
         }
 
         private void ResetProjectionCacheState()
