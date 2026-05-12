@@ -18,6 +18,8 @@ namespace SplatPack.Runtime
     {
         private const int ProjectionThreadGroupSize = 64;
         private const int MaxProjectedEyes = 2;
+        private const float StandaloneSafeMaxRadiusPixels = 48f;
+        private const float MinimumTailAlphaClip = 0.002f;
 
         [Header("Input")]
         [SerializeField] private SplatPackAsset asset;
@@ -33,13 +35,14 @@ namespace SplatPack.Runtime
         [SerializeField] private float recenterDistanceMeters = 3f;
 
         [Header("Quality")]
-        [SerializeField] private float opacityScale = 1.5f;
-        [SerializeField] private float splatScale = 1f;
-        [SerializeField] private float alphaClip;
+        [SerializeField] private float opacityScale = 1f;
+        [SerializeField] private float splatScale = 0.9f;
+        [SerializeField] private float alphaClip = 0.002f;
         [SerializeField] private float minScreenRadiusPixels = 0.75f;
-        [SerializeField] private float maxScreenRadiusPixels = 64f;
-        [SerializeField] private float kernel2DSize = 0.3f;
-        [SerializeField] private float eigenTermFloor = 0.1f;
+        [SerializeField] private float maxScreenRadiusPixels = 48f;
+        [SerializeField] private float kernel2DSize = 0.05f;
+        [SerializeField] private float eigenTermFloor = 1e-8f;
+        [SerializeField] private bool enforceStandaloneRadiusCap = true;
 
         [Header("Sorting")]
         [SerializeField] private SplatPackSortMode sortMode = SplatPackSortMode.SplatDepth;
@@ -293,9 +296,9 @@ namespace SplatPack.Runtime
             propertyBlock.SetBuffer("_Splats", splatBuffer);
             propertyBlock.SetBuffer("_DrawOrder", drawOrderBuffer);
             propertyBlock.SetBuffer("_ProjectedSplats", projectedBuffer);
-            propertyBlock.SetFloat("_OpacityScale", Mathf.Max(0f, opacityScale));
-            propertyBlock.SetFloat("_SplatScale", Mathf.Max(0f, splatScale));
-            propertyBlock.SetFloat("_AlphaClip", Mathf.Max(0f, alphaClip));
+            propertyBlock.SetFloat("_OpacityScale", ResolveOpacityScale());
+            propertyBlock.SetFloat("_SplatScale", ResolveSplatScale());
+            propertyBlock.SetFloat("_AlphaClip", ResolveAlphaClip());
             propertyBlock.SetInt("_ProjectedSplatCacheEyeStride", package.SplatCount);
             propertyBlock.SetInt("_ProjectedSplatCacheEyeCount", eyeCount);
             ApplyMaterialProperties(material, eyeCount);
@@ -307,9 +310,9 @@ namespace SplatPack.Runtime
             material.SetBuffer("_Splats", splatBuffer);
             material.SetBuffer("_DrawOrder", drawOrderBuffer);
             material.SetBuffer("_ProjectedSplats", projectedBuffer);
-            material.SetFloat("_OpacityScale", Mathf.Max(0f, opacityScale));
-            material.SetFloat("_SplatScale", Mathf.Max(0f, splatScale));
-            material.SetFloat("_AlphaClip", Mathf.Max(0f, alphaClip));
+            material.SetFloat("_OpacityScale", ResolveOpacityScale());
+            material.SetFloat("_SplatScale", ResolveSplatScale());
+            material.SetFloat("_AlphaClip", ResolveAlphaClip());
             material.SetFloat("_UseProjectedSplatCache", 1f);
             material.SetInt("_ProjectedSplatCacheEyeStride", package.SplatCount);
             material.SetInt("_ProjectedSplatCacheEyeCount", eyeCount);
@@ -420,10 +423,10 @@ namespace SplatPack.Runtime
             projectionCompute.SetBuffer(projectionKernel, "_Splats", splatBuffer);
             projectionCompute.SetBuffer(projectionKernel, "_ProjectedSplats", projectedBuffer);
             projectionCompute.SetInt("_SplatCount", package.SplatCount);
-            projectionCompute.SetFloat("_SplatScale", Mathf.Max(0f, splatScale));
-            projectionCompute.SetFloat("_OpacityScale", Mathf.Max(0f, opacityScale));
+            projectionCompute.SetFloat("_SplatScale", ResolveSplatScale());
+            projectionCompute.SetFloat("_OpacityScale", ResolveOpacityScale());
             projectionCompute.SetFloat("_MinScreenRadiusPixels", Mathf.Max(0f, minScreenRadiusPixels));
-            projectionCompute.SetFloat("_MaxScreenRadiusPixels", Mathf.Max(minScreenRadiusPixels, maxScreenRadiusPixels));
+            projectionCompute.SetFloat("_MaxScreenRadiusPixels", ResolveMaxScreenRadiusPixels());
             projectionCompute.SetFloat("_Kernel2DSize", Mathf.Max(0f, kernel2DSize));
             projectionCompute.SetFloat("_EigenTermFloor", Mathf.Max(0f, eigenTermFloor));
             projectionCompute.SetMatrix("_SplatLocalToWorld", transform.localToWorldMatrix);
@@ -463,6 +466,28 @@ namespace SplatPack.Runtime
             projectionCompute.SetVector("_CameraWorldPosition", ExtractCameraWorldPosition(worldToView));
             projectionCompute.SetVector("_ViewportSize", new Vector4(width, height, 1f / width, 1f / height));
             projectionCompute.Dispatch(projectionKernel, groups, 1, 1);
+        }
+
+        private float ResolveOpacityScale()
+        {
+            return Mathf.Max(0f, opacityScale);
+        }
+
+        private float ResolveSplatScale()
+        {
+            float value = Mathf.Max(0f, splatScale);
+            return enforceStandaloneRadiusCap ? Mathf.Min(value, 1f) : value;
+        }
+
+        private float ResolveAlphaClip()
+        {
+            return Mathf.Max(enforceStandaloneRadiusCap ? MinimumTailAlphaClip : 0f, alphaClip);
+        }
+
+        private float ResolveMaxScreenRadiusPixels()
+        {
+            float value = Mathf.Max(minScreenRadiusPixels, maxScreenRadiusPixels);
+            return enforceStandaloneRadiusCap ? Mathf.Min(value, StandaloneSafeMaxRadiusPixels) : value;
         }
 
         private Material ResolveMaterial()
@@ -589,6 +614,7 @@ namespace SplatPack.Runtime
                 + $"rendererPosition={transform.position}, "
                 + $"projection={lastProjectionDispatchCpuMs:0.###}ms-cpu/{Mathf.Max(1, lastProjectionEyeCount)}eye, "
                 + $"sort={BuildSortDiagnostics()}, "
+                + $"quality=opacity/{ResolveOpacityScale():0.###},scale/{ResolveSplatScale():0.###},maxR/{ResolveMaxScreenRadiusPixels():0.###},clip/{ResolveAlphaClip():0.####}, "
                 + BuildProjectionDiagnostics(camera)
                 + $"splats={package.SplatCount}, chunks={package.ChunkCount}, "
                 + $"vertices={package.SplatCount * 6 * ResolveProceduralDrawInstanceCount(camera)}.");

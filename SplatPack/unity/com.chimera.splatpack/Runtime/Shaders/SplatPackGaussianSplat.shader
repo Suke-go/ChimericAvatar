@@ -130,6 +130,7 @@ Shader "Chimera/SplatPack Gaussian Splat"
             {
                 UNITY_SETUP_STEREO_EYE_INDEX_POST_VERTEX(input);
                 float r2 = dot(input.gaussianUV, input.gaussianUV);
+                clip(8.0 - r2);
                 float alpha = exp(-0.5 * r2) * input.color.a * _OpacityScale;
                 clip(alpha - _AlphaClip);
                 return float4(input.color.rgb, alpha);

@@ -131,8 +131,8 @@ void ProjectSplats(uint3 id : SV_DispatchThreadID)
 
     float2 dir1 = float2(dir0.y, -dir0.x);
     float maxRadiusPixels = max(_MinScreenRadiusPixels, _MaxScreenRadiusPixels);
-    float radius0Pixels = max(_MinScreenRadiusPixels, _SplatScale * min(kGaussianExtent * sqrt(lambda0), maxRadiusPixels));
-    float radius1Pixels = max(_MinScreenRadiusPixels, _SplatScale * min(kGaussianExtent * sqrt(lambda1), maxRadiusPixels));
+    float radius0Pixels = clamp(_SplatScale * kGaussianExtent * sqrt(lambda0), _MinScreenRadiusPixels, maxRadiusPixels);
+    float radius1Pixels = clamp(_SplatScale * kGaussianExtent * sqrt(lambda1), _MinScreenRadiusPixels, maxRadiusPixels);
     float2 axis0Ndc = 2.0 * dir0 * radius0Pixels / max(float2(1.0, 1.0), _ViewportSize.xy);
     float2 axis1Ndc = 2.0 * dir1 * radius1Pixels / max(float2(1.0, 1.0), _ViewportSize.xy);
 
