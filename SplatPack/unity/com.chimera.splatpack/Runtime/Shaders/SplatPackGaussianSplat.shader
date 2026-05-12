@@ -55,6 +55,8 @@ Shader "Chimera/SplatPack Gaussian Splat"
             StructuredBuffer<uint> _DrawOrder;
             StructuredBuffer<ProjectedSplat> _ProjectedSplats;
 
+            static const float kGaussianExtent = 2.8284271247461903;
+
             CBUFFER_START(UnityPerMaterial)
                 float _OpacityScale;
                 float _SplatScale;
@@ -119,7 +121,7 @@ Shader "Chimera/SplatPack Gaussian Splat"
                 clip.xy += (projected.axis0Ndc.xy * corner.x + projected.axis1Ndc.xy * corner.y) * clip.w;
 
                 output.positionHCS = clip;
-                output.gaussianUV = corner;
+                output.gaussianUV = corner * kGaussianExtent;
                 output.color = projected.color;
                 return output;
             }
